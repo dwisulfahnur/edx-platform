@@ -515,6 +515,7 @@ def _send_course_email(entry_id, email_id, to_list, global_email_context, subtas
             current_recipient = to_list[-1]
             email = current_recipient['email']
             if _has_non_ascii_characters(email):
+                to_list.pop()
                 total_recipients_failed += 1
                 log.info(
                     "BulkEmail ==> Email address %s contains non-ascii characters. Skipping sending "

@@ -278,6 +278,26 @@ class TestBulkEmailInstructorTask(InstructorTaskCourseTestCase):
         # Test that celery handles permanent SMTPDataErrors by failing and not retrying.
         self._test_email_address_failures(SESDomainEndsWithDotError(554, "Email address ends with a dot"))
 
+    def test_email_address_with_ascii_characters_failed(self):
+        """
+        Test that celery handles with ascii characters in email address and
+        failed the email and not retrying."""
+        num_emails = 10
+        # We also send email to the instructor:
+        students = [self.create_student('robot%d' % i) for i in xrange(num_emails - 1)]
+        for i in xrange(len(students)):
+            students[i].email = ('robot%d@tesá.com' % i)
+            students[i].save()
+
+        expected_fails = num_emails - 1
+        expected_succeeds = num_emails - expected_fails
+
+        with patch('bulk_email.tasks.get_connection', autospec=True) as get_conn:
+            get_conn.return_value.send_messages.side_effect = cycle([None])
+            self._test_run_with_task(
+                send_bulk_course_email, 'emailed', num_emails, expected_succeeds, failed=expected_fails
+            )
+
     def _test_retry_after_limited_retry_error(self, exception):
         """Test that celery handles connection failures by retrying."""
         # If we want the batch to succeed, we need to send fewer emails
