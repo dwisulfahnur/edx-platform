@@ -280,8 +280,9 @@ class TestBulkEmailInstructorTask(InstructorTaskCourseTestCase):
 
     def test_email_address_with_ascii_characters_failed(self):
         """
-        Test that celery handles with ascii characters in email address and
-        failed the email and not retrying."""
+        Tests that bulk email skips the email address with non_ascii characters
+        and does not fail at all.
+        """
         num_emails = 10
         # We also send email to the instructor:
         students = [self.create_student('robot%d' % i) for i in xrange(num_emails - 1)]
