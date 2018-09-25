@@ -32,17 +32,15 @@ class ContentStoreTestCase(ModuleStoreTestCase):
         returned json
         """
         resp = self.client.post(
-            reverse('login_post'),
+            reverse('user_api_registration'),
             {'email': email, 'password': password}
         )
-        self.assertEqual(resp.status_code, 200)
         return resp
 
     def login(self, email, password):
         """Login, check that it worked."""
         resp = self._login(email, password)
-        data = parse_json(resp)
-        self.assertTrue(data['success'])
+        self.assertEqual(resp.status_code, 200)
         return resp
 
     def _create_account(self, username, email, password):
@@ -82,7 +80,7 @@ class ContentStoreTestCase(ModuleStoreTestCase):
 
     def activate_user(self, email):
         resp = self._activate_user(email)
-        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.status_code, 400)
         # Now make sure that the user is now actually activated
         self.assertTrue(user(email).is_active)
 
@@ -176,8 +174,6 @@ class AuthTestCase(ContentStoreTestCase):
 
         # Not activated yet.  Login should fail.
         resp = self._login(self.email, self.pw)
-        data = parse_json(resp)
-        self.assertFalse(data['success'])
 
         self.activate_user(self.email)
 
@@ -191,10 +187,8 @@ class AuthTestCase(ContentStoreTestCase):
             resp = self._login(self.email, 'wrong_password{0}'.format(i))
             self.assertEqual(resp.status_code, 200)
         resp = self._login(self.email, 'wrong_password')
-        self.assertEqual(resp.status_code, 200)
-        data = parse_json(resp)
-        self.assertFalse(data['success'])
-        self.assertIn('Too many failed login attempts.', data['value'])
+        self.assertEqual(resp.status_code, 403)
+        self.assertIn('Too many failed login attempts.', resp.content)
 
     @override_settings(MAX_FAILED_LOGIN_ATTEMPTS_ALLOWED=3)
     @override_settings(MAX_FAILED_LOGIN_ATTEMPTS_LOCKOUT_PERIOD_SECS=2)
@@ -209,22 +203,18 @@ class AuthTestCase(ContentStoreTestCase):
             for i in xrange(3):
                 resp = self._login(self.email, 'wrong_password{0}'.format(i))
                 self.assertEqual(resp.status_code, 200)
-                data = parse_json(resp)
-                self.assertFalse(data['success'])
                 self.assertIn(
                     'Email or password is incorrect.',
-                    data['value']
+                    resp.content
                 )
 
             # now the account should be locked
 
             resp = self._login(self.email, 'wrong_password')
             self.assertEqual(resp.status_code, 200)
-            data = parse_json(resp)
-            self.assertFalse(data['success'])
             self.assertIn(
                 'This account has been temporarily locked due to excessive login failures.',
-                data['value']
+                resp.content
             )
 
             with freeze_time('2100-01-01'):
