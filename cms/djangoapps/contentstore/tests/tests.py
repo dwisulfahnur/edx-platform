@@ -45,7 +45,7 @@ class ContentStoreTestCase(ModuleStoreTestCase):
 
     def _create_account(self, username, email, password):
         """Try to create an account.  No error checking"""
-        resp = self.client.post('/create_account', {
+        resp = self.client.post('/account/registration', {
             'username': username,
             'email': email,
             'password': password,
