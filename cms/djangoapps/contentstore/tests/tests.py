@@ -32,7 +32,7 @@ class ContentStoreTestCase(ModuleStoreTestCase):
         returned json
         """
         resp = self.client.post(
-            reverse('user_api_registration'),
+            reverse('user_api_login_session'),
             {'email': email, 'password': password}
         )
         return resp
@@ -45,7 +45,8 @@ class ContentStoreTestCase(ModuleStoreTestCase):
 
     def _create_account(self, username, email, password):
         """Try to create an account.  No error checking"""
-        resp = self.client.post('/account/registration', {
+        registration_url = reverse('user_api_registration')
+        resp = self.client.post(registration_url, {
             'username': username,
             'email': email,
             'password': password,
@@ -80,7 +81,7 @@ class ContentStoreTestCase(ModuleStoreTestCase):
 
     def activate_user(self, email):
         resp = self._activate_user(email)
-        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.status_code, 200)
         # Now make sure that the user is now actually activated
         self.assertTrue(user(email).is_active)
 
@@ -148,10 +149,9 @@ class AuthTestCase(ContentStoreTestCase):
 
     def test_create_account_errors(self):
         # No post data -- should fail
-        resp = self.client.post('/account/registration', {})
+        registration_url = reverse('user_api_registration')
+        resp = self.client.post(registration_url, {})
         self.assertEqual(resp.status_code, 400)
-        data = parse_json(resp)
-        self.assertEqual(data['success'], False)
 
     def test_create_account(self):
         self.create_account(self.username, self.email, self.pw)
@@ -161,7 +161,7 @@ class AuthTestCase(ContentStoreTestCase):
         User.objects.create_user(self.username, self.email, self.pw)
         resp = self._create_account(self.username, "abc@def.com", "password")
         # we have a constraint on unique usernames, so this should fail
-        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.status_code, 409)
 
     def test_create_account_pw_already_exists(self):
         User.objects.create_user(self.username, self.email, self.pw)
@@ -185,7 +185,7 @@ class AuthTestCase(ContentStoreTestCase):
         # login attempts in one 5 minute period before the rate gets limited
         for i in xrange(30):
             resp = self._login(self.email, 'wrong_password{0}'.format(i))
-            self.assertEqual(resp.status_code, 200)
+            self.assertEqual(resp.status_code, 403)
         resp = self._login(self.email, 'wrong_password')
         self.assertEqual(resp.status_code, 403)
         self.assertIn('Too many failed login attempts.', resp.content)
@@ -202,7 +202,7 @@ class AuthTestCase(ContentStoreTestCase):
 
             for i in xrange(3):
                 resp = self._login(self.email, 'wrong_password{0}'.format(i))
-                self.assertEqual(resp.status_code, 200)
+                self.assertEqual(resp.status_code, 403)
                 self.assertIn(
                     'Email or password is incorrect.',
                     resp.content
@@ -211,7 +211,7 @@ class AuthTestCase(ContentStoreTestCase):
             # now the account should be locked
 
             resp = self._login(self.email, 'wrong_password')
-            self.assertEqual(resp.status_code, 200)
+            self.assertEqual(resp.status_code, 403)
             self.assertIn(
                 'This account has been temporarily locked due to excessive login failures.',
                 resp.content
@@ -222,9 +222,11 @@ class AuthTestCase(ContentStoreTestCase):
 
             # make sure the failed attempt counter gets reset on successful login
             resp = self._login(self.email, 'wrong_password')
-            self.assertEqual(resp.status_code, 200)
-            data = parse_json(resp)
-            self.assertFalse(data['success'])
+            self.assertEqual(resp.status_code, 403)
+            self.assertIn(
+                'Email or password is incorrect.',
+                resp.content
+            )
 
             # account should not be locked out after just one attempt
             self.login(self.email, self.pw)
