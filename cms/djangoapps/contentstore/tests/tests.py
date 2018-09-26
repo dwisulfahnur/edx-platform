@@ -148,7 +148,7 @@ class AuthTestCase(ContentStoreTestCase):
 
     def test_create_account_errors(self):
         # No post data -- should fail
-        resp = self.client.post('/create_account', {})
+        resp = self.client.post('/account/registration', {})
         self.assertEqual(resp.status_code, 400)
         data = parse_json(resp)
         self.assertEqual(data['success'], False)
