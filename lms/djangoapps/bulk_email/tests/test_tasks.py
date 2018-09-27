@@ -280,23 +280,32 @@ class TestBulkEmailInstructorTask(InstructorTaskCourseTestCase):
 
     def test_email_address_with_ascii_characters_failed(self):
         """
-        Tests that bulk email skips the email address with non_ascii characters
-        and does not fail at all.
+        Tests that bulk email skips the email address containing non-ASCII characters
+        and does not fail.
         """
         num_emails = 10
-        # We also send email to the instructor:
-        students = [self.create_student('robot%d' % i) for i in xrange(num_emails - 1)]
-        for i in xrange(len(students)):
-            students[i].email = ('robot%d@tesá.com' % i)
-            students[i].save()
+        emails_with_non_ascii_chars = 3
+        num_of_course_instructors = 1
 
-        expected_fails = num_emails - 1
-        expected_succeeds = num_emails - expected_fails
+        students = [self.create_student('robot%d' % i) for i in range(num_emails)]
+        for index, student in enumerate(students, 1):
+            if index > emails_with_non_ascii_chars:
+                break
+            student.email = ('robot%d@tesá.com' % index)
+            student.save()
+
+        total = num_emails + num_of_course_instructors
+        expected_succeeds = num_emails - emails_with_non_ascii_chars + num_of_course_instructors
+        expected_fails = emails_with_non_ascii_chars
 
         with patch('bulk_email.tasks.get_connection', autospec=True) as get_conn:
             get_conn.return_value.send_messages.side_effect = cycle([None])
             self._test_run_with_task(
-                send_bulk_course_email, 'emailed', num_emails, expected_succeeds, failed=expected_fails
+                task_class=send_bulk_course_email,
+                action_name='emailed',
+                total=total,
+                succeeded=expected_succeeds,
+                failed=expected_fails
             )
 
     def _test_retry_after_limited_retry_error(self, exception):
