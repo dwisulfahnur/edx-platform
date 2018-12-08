@@ -14,15 +14,19 @@ from django.http import HttpResponseForbidden
 from openedx.core.djangoapps.theming.helpers import get_current_request
 from six import text_type
 
-from student.models import User, UserProfile, Registration, email_exists_or_retired
+from student.models import User, UserProfile, Registration, email_exists_or_retired, username_exists_or_retired
 from student import forms as student_forms
 from student import views as student_views
 from util.model_utils import emit_setting_changed_event
-from util.password_policy_validators import validate_password
+from util.password_policy_validators import validate_password, normalize_password
 
 from openedx.core.djangoapps.site_configuration import helpers as configuration_helpers
 from openedx.core.djangoapps.user_api import errors, accounts, forms, helpers
-from openedx.core.djangoapps.user_api.config.waffle import PREVENT_AUTH_USER_WRITES, SYSTEM_MAINTENANCE_MSG, waffle
+from openedx.core.djangoapps.user_api.config.waffle import (
+    PREVENT_AUTH_USER_WRITES,
+    SYSTEM_MAINTENANCE_MSG,
+    waffle,
+)
 from openedx.core.djangoapps.user_api.errors import (
     AccountUpdateError,
     AccountValidationError,
@@ -182,7 +186,7 @@ def update_account_settings(requesting_user, update, username=None):
         # Don't process with sending email to given new email, if it is already associated with
         # an account. User must see same success message with no error.
         # This is so that this endpoint cannot be used to determine if an email is valid or not.
-        changing_email = not _verify_email_does_not_already_exists(new_email)
+        changing_email = new_email and not email_exists_or_retired(new_email)
 
     # If the user asked to change full name, validate it
     if changing_full_name:
@@ -273,13 +277,6 @@ def update_account_settings(requesting_user, update, username=None):
             )
 
 
-def _verify_email_does_not_already_exists(new_email):
-    """
-    Return `True` if an account with given email already exists.
-    """
-    return User.objects.filter(email=new_email).count() != 0
-
-
 @helpers.intercept_errors(errors.UserAPIInternalError, ignore_errors=[errors.UserAPIRequestError])
 @transaction.atomic
 def create_account(username, password, email):
@@ -294,7 +291,6 @@ def create_account(username, password, email):
 
     * 3rd party auth
     * External auth (shibboleth)
-    * Complex password policies (ENFORCE_PASSWORD_POLICY)
 
     In addition, we assume that some functionality is handled
     at higher layers:
@@ -334,11 +330,12 @@ def create_account(username, password, email):
     # Validate the username, password, and email
     # This will raise an exception if any of these are not in a valid format.
     _validate_username(username)
-    _validate_password(password, username)
+    _validate_password(password, username, email)
     _validate_email(email)
 
     # Create the user account, setting them to "inactive" until they activate their account.
     user = User(username=username, email=email, is_active=False)
+    password = normalize_password(password)
     user.set_password(password)
 
     try:
@@ -501,17 +498,17 @@ def get_confirm_email_validation_error(confirm_email, email):
     return _validate(_validate_confirm_email, errors.AccountEmailInvalid, confirm_email, email)
 
 
-def get_password_validation_error(password, username=None):
+def get_password_validation_error(password, username=None, email=None):
     """Get the built-in validation error message for when
     the password is invalid in some way.
 
     :param password: The proposed password (unicode).
     :param username: The username associated with the user's account (unicode).
-    :param default: The message to default to in case of no error.
+    :param email: The email associated with the user's account (unicode).
     :return: Validation error message.
 
     """
-    return _validate(_validate_password, errors.AccountPasswordInvalid, password, username)
+    return _validate(_validate_password, errors.AccountPasswordInvalid, password, username, email)
 
 
 def get_country_validation_error(country):
@@ -650,15 +647,17 @@ def _validate_confirm_email(confirm_email, email):
         raise errors.AccountEmailInvalid(accounts.REQUIRED_FIELD_CONFIRM_EMAIL_MSG)
 
 
-def _validate_password(password, username=None):
+def _validate_password(password, username=None, email=None):
     """Validate the format of the user's password.
 
     Passwords cannot be the same as the username of the account,
-    so we take `username` as an argument.
+    so we create a temp_user using the username and email to test the password against.
+    This user is never saved.
 
     Arguments:
         password (unicode): The proposed password.
         username (unicode): The username associated with the user's account.
+        email (unicode): The email associated with the user's account.
 
     Returns:
         None
@@ -669,12 +668,12 @@ def _validate_password(password, username=None):
     """
     try:
         _validate_type(password, basestring, accounts.PASSWORD_BAD_TYPE_MSG)
-
-        validate_password(password, username=username)
+        temp_user = User(username=username, email=email) if username else None
+        validate_password(password, user=temp_user)
     except errors.AccountDataBadType as invalid_password_err:
         raise errors.AccountPasswordInvalid(text_type(invalid_password_err))
     except ValidationError as validation_err:
-        raise errors.AccountPasswordInvalid(validation_err.message)
+        raise errors.AccountPasswordInvalid(' '.join(validation_err.messages))
 
 
 def _validate_country(country):
@@ -695,7 +694,7 @@ def _validate_username_doesnt_exist(username):
     :return: None
     :raises: errors.AccountUsernameAlreadyExists
     """
-    if username is not None and User.objects.filter(username=username).exists():
+    if username is not None and username_exists_or_retired(username):
         raise errors.AccountUsernameAlreadyExists(_(accounts.USERNAME_CONFLICT_MSG).format(username=username))
 
 

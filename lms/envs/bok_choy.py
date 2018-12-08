@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 Settings for Bok Choy tests that are used when running LMS.
 
@@ -14,6 +15,7 @@ import os
 from path import Path as path
 from tempfile import mkdtemp
 
+from django.utils.translation import ugettext_lazy
 from openedx.core.release import RELEASE_LINE
 
 CONFIG_ROOT = path(__file__).abspath().dirname()
@@ -28,7 +30,7 @@ TEST_ROOT = CONFIG_ROOT.dirname().dirname() / "test_root"
 os.environ['SERVICE_VARIANT'] = 'bok_choy_docker' if 'BOK_CHOY_HOSTNAME' in os.environ else 'bok_choy'
 os.environ['CONFIG_ROOT'] = CONFIG_ROOT
 
-from .aws import *  # pylint: disable=wildcard-import, unused-wildcard-import
+from .production import *  # pylint: disable=wildcard-import, unused-wildcard-import, wrong-import-position
 
 
 ######################### Testing overrides ####################################
@@ -51,6 +53,9 @@ update_module_store_settings(
 
 # Capture the console log via template includes, until webdriver supports log capture again
 CAPTURE_CONSOLE_LOG = True
+
+PLATFORM_NAME = ugettext_lazy(u"édX")
+PLATFORM_DESCRIPTION = ugettext_lazy(u"Open édX Platform")
 
 ############################ STATIC FILES #############################
 
@@ -173,7 +178,6 @@ YOUTUBE['TEXT_API']['url'] = "{0}:{1}/test_transcripts_youtube/".format(YOUTUBE_
 ############################# SECURITY SETTINGS ################################
 # Default to advanced security in common.py, so tests can reset here to use
 # a simpler security model
-FEATURES['ENFORCE_PASSWORD_POLICY'] = False
 FEATURES['ENABLE_MAX_FAILED_LOGIN_ATTEMPTS'] = False
 FEATURES['SQUELCH_PII_IN_LOGS'] = False
 FEATURES['PREVENT_CONCURRENT_LOGINS'] = False
@@ -182,9 +186,6 @@ FEATURES['ADVANCED_SECURITY'] = False
 FEATURES['ENABLE_MOBILE_REST_API'] = True  # Show video bumper in LMS
 FEATURES['ENABLE_VIDEO_BUMPER'] = True  # Show video bumper in LMS
 FEATURES['SHOW_BUMPER_PERIODICITY'] = 1
-
-PASSWORD_MIN_LENGTH = None
-PASSWORD_COMPLEXITY = {}
 
 # Enable courseware search for tests
 FEATURES['ENABLE_COURSEWARE_SEARCH'] = True

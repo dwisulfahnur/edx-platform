@@ -284,16 +284,24 @@ class ProgramProgressMeter(object):
 
         Returns a dict of {uuid_string: available_datetime}
         """
+        # Query for all user certs up front, for performance reasons (rather than querying per course run).
+        user_certificates = GeneratedCertificate.eligible_certificates.filter(user=self.user)
+        certificates_by_run = {cert.course_id: cert for cert in user_certificates}
+
         completed = {}
         for program in self.programs:
-            available_date = self._available_date_for_program(program)
+            available_date = self._available_date_for_program(program, certificates_by_run)
             if available_date:
                 completed[program['uuid']] = available_date
         return completed
 
-    def _available_date_for_program(self, program_data):
+    def _available_date_for_program(self, program_data, certificates):
         """
         Calculate the available date for the program based on the courses within it.
+
+        Arguments:
+            program_data (dict): nested courses and course runs
+            certificates (dict): course run key -> certificate mapping
 
         Returns a datetime object or None if the program is not complete.
         """
@@ -305,7 +313,7 @@ class ProgramProgressMeter(object):
                 key = CourseKey.from_string(course_run['key'])
 
                 # Get a certificate if one exists
-                certificate = GeneratedCertificate.eligible_certificates.filter(user=self.user, course_id=key).first()
+                certificate = certificates.get(key)
                 if certificate is None:
                     continue
 
@@ -486,10 +494,19 @@ class ProgramDataExtender(object):
             for course_run in course['course_runs']:
                 # State to be shared across handlers.
                 self.course_run_key = CourseKey.from_string(course_run['key'])
-                self.course_overview = CourseOverview.get_from_id(self.course_run_key)
-                self.enrollment_start = self.course_overview.enrollment_start or DEFAULT_ENROLLMENT_START_DATE
 
-                self._execute('_attach_course_run', course_run)
+                # Some (old) course runs may exist for a program which do not exist in LMS. In that case,
+                # continue without the course run.
+                try:
+                    self.course_overview = CourseOverview.get_from_id(self.course_run_key)
+                except CourseOverview.DoesNotExist:
+                    log.warning('Failed to get course overview for course run key: %s',
+                                self.course_run.get('key'),
+                                exec_info=True)
+                else:
+                    self.enrollment_start = self.course_overview.enrollment_start or DEFAULT_ENROLLMENT_START_DATE
+
+                    self._execute('_attach_course_run', course_run)
 
     def _attach_course_run_certificate_url(self, run_mode):
         certificate_data = certificate_api.certificate_downloadable_status(self.user, self.course_run_key)

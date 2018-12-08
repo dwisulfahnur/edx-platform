@@ -1,18 +1,21 @@
 """
 Helpers for courseware tests.
 """
+from datetime import timedelta
 import json
 
 from django.contrib import messages
 from django.contrib.auth.models import User
-from django.urls import reverse
 from django.test import TestCase
 from django.test.client import Client, RequestFactory
+from django.urls import reverse
+from django.utils.timezone import now
 from six import text_type
 
 from courseware.access import has_access
 from courseware.masquerade import handle_ajax, setup_masquerade
 from edxmako.shortcuts import render_to_string
+from lms.djangoapps.courseware.date_summary import verified_upgrade_deadline_link
 from lms.djangoapps.lms_xblock.field_data import LmsFieldData
 from openedx.core.djangoapps.content.course_overviews.models import CourseOverview
 from openedx.core.lib.url_utils import quote_slashes
@@ -194,11 +197,9 @@ class LoginEnrollmentTestCase(TestCase):
         """
         Login, check that the corresponding view's response has a 200 status code.
         """
-        resp = self.client.post(reverse('login'),
+        resp = self.client.post(reverse('user_api_login_session'),
                                 {'email': email, 'password': password})
         self.assertEqual(resp.status_code, 200)
-        data = json.loads(resp.content)
-        self.assertTrue(data['success'])
 
     def logout(self):
         """
@@ -212,7 +213,7 @@ class LoginEnrollmentTestCase(TestCase):
         """
         Create the account and check that it worked.
         """
-        url = reverse('create_account')
+        url = reverse('user_api_registration')
         request_data = {
             'username': username,
             'email': email,
@@ -222,8 +223,6 @@ class LoginEnrollmentTestCase(TestCase):
             'honor_code': 'true',
         }
         resp = self.assert_request_status_code(200, url, method="POST", data=request_data)
-        data = json.loads(resp.content)
-        self.assertEqual(data['success'], True)
         # Check both that the user is created, and inactive
         user = User.objects.get(email=email)
         self.assertFalse(user.is_active)
@@ -352,3 +351,19 @@ def _create_mock_json_request(user, data, method='POST'):
     request.user = user
     request.session = {}
     return request
+
+
+def get_expiration_banner_text(user, course):
+    """
+    Get text for banner that messages user course expiration date
+    for different tests that depend on it.
+    """
+    expiration_date = (now() + timedelta(weeks=4)).strftime('%b %-d')
+    upgrade_link = verified_upgrade_deadline_link(user=user, course=course)
+    bannerText = 'Your access to this course expires on {expiration_date}. \
+        <a href="{upgrade_link}">Upgrade now <span class="sr-only">to retain access past {expiration_date}.\
+        </span></a><span aria-hidden="true">for unlimited access.</span>'.format(
+        expiration_date=expiration_date,
+        upgrade_link=upgrade_link
+    )
+    return bannerText

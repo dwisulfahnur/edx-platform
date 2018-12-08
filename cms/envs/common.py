@@ -114,6 +114,7 @@ from lms.envs.common import (
     FILE_UPLOAD_STORAGE_PREFIX,
 
     COURSE_ENROLLMENT_MODES,
+    CONTENT_TYPE_GATE_GROUP_IDS,
 
     HELP_TOKENS_BOOKS,
 
@@ -199,9 +200,6 @@ FEATURES = {
     # If set to True, new Studio users won't be able to author courses unless
     # an Open edX admin has added them to the course creator group.
     'ENABLE_CREATOR_GROUP': True,
-
-    # whether to use password policy enforcement or not
-    'ENFORCE_PASSWORD_POLICY': False,
 
     # Turn off account locking if failed login attempts exceeds a limit
     'ENABLE_MAX_FAILED_LOGIN_ATTEMPTS': False,
@@ -470,6 +468,8 @@ XQUEUE_INTERFACE = {
 ################################# Middleware ###################################
 
 MIDDLEWARE_CLASSES = [
+    'openedx.core.lib.x_forwarded_for.middleware.XForwardedForMiddleware',
+
     'crum.CurrentRequestUserMiddleware',
 
     # A newer and safer request cache.
@@ -481,6 +481,7 @@ MIDDLEWARE_CLASSES = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.sites.middleware.CurrentSiteMiddleware',
+    'edx_rest_framework_extensions.auth.jwt.middleware.JwtAuthCookieMiddleware',
 
     # Allows us to define redirects via Django admin
     'django_sites_extensions.middleware.RedirectMiddleware',
@@ -532,7 +533,7 @@ MIDDLEWARE_CLASSES = [
     # Outputs monitoring metrics for a request.
     'edx_rest_framework_extensions.middleware.RequestMetricsMiddleware',
 
-    'edx_rest_framework_extensions.middleware.EnsureJWTAuthSettingsMiddleware',
+    'edx_rest_framework_extensions.auth.jwt.middleware.EnsureJWTAuthSettingsMiddleware',
 
     # This must be last so that it runs first in the process_response chain
     'openedx.core.djangoapps.site_configuration.middleware.SessionCookieDomainOverrideMiddleware',
@@ -919,7 +920,6 @@ CELERY_DEFAULT_EXCHANGE_TYPE = 'direct'
 
 HIGH_PRIORITY_QUEUE = 'edx.core.high'
 DEFAULT_PRIORITY_QUEUE = 'edx.core.default'
-LOW_PRIORITY_QUEUE = 'edx.core.low'
 
 CELERY_QUEUE_HA_POLICY = 'all'
 
@@ -930,7 +930,6 @@ CELERY_DEFAULT_ROUTING_KEY = DEFAULT_PRIORITY_QUEUE
 
 CELERY_QUEUES = {
     HIGH_PRIORITY_QUEUE: {},
-    LOW_PRIORITY_QUEUE: {},
     DEFAULT_PRIORITY_QUEUE: {}
 }
 
@@ -999,6 +998,7 @@ INSTALLED_APPS = [
 
     # Database-backed configuration
     'config_models',
+    'openedx.core.djangoapps.config_model_utils',
     'waffle',
 
     # Monitor the status of services
@@ -1165,6 +1165,10 @@ INSTALLED_APPS = [
 
     # API Documentation
     'rest_framework_swagger',
+
+    'openedx.features.course_duration_limits',
+    'openedx.features.content_type_gating',
+    'experiments',
 ]
 
 
@@ -1241,12 +1245,23 @@ EVENT_TRACKING_BACKENDS = {
 EVENT_TRACKING_PROCESSORS = []
 
 #### PASSWORD POLICY SETTINGS #####
-
-PASSWORD_MIN_LENGTH = None
-PASSWORD_MAX_LENGTH = None
-PASSWORD_COMPLEXITY = {}
-PASSWORD_DICTIONARY_EDIT_DISTANCE_THRESHOLD = None
-PASSWORD_DICTIONARY = []
+AUTH_PASSWORD_VALIDATORS = [
+    {
+        "NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator",
+    },
+    {
+        "NAME": "util.password_policy_validators.MinimumLengthValidator",
+        "OPTIONS": {
+            "min_length": 2
+        }
+    },
+    {
+        "NAME": "util.password_policy_validators.MaximumLengthValidator",
+        "OPTIONS": {
+            "max_length": 75
+        }
+    },
+]
 
 ##### ACCOUNT LOCKOUT DEFAULT PARAMETERS #####
 MAX_FAILED_LOGIN_ATTEMPTS_ALLOWED = 5
@@ -1495,22 +1510,22 @@ COURSE_CATALOG_API_URL = None
 ############################# Persistent Grades ####################################
 
 # Queue to use for updating persistent grades
-RECALCULATE_GRADES_ROUTING_KEY = LOW_PRIORITY_QUEUE
+RECALCULATE_GRADES_ROUTING_KEY = DEFAULT_PRIORITY_QUEUE
 
 # Queue to use for updating grades due to grading policy change
-POLICY_CHANGE_GRADES_ROUTING_KEY = LOW_PRIORITY_QUEUE
+POLICY_CHANGE_GRADES_ROUTING_KEY = DEFAULT_PRIORITY_QUEUE
 
 # Rate limit for regrading tasks that a grading policy change can kick off
 POLICY_CHANGE_TASK_RATE_LIMIT = '300/h'
 
 ############## Settings for CourseGraph ############################
-COURSEGRAPH_JOB_QUEUE = LOW_PRIORITY_QUEUE
+COURSEGRAPH_JOB_QUEUE = DEFAULT_PRIORITY_QUEUE
 
 ########## Settings for video transcript migration tasks ############
-VIDEO_TRANSCRIPT_MIGRATIONS_JOB_QUEUE = LOW_PRIORITY_QUEUE
+VIDEO_TRANSCRIPT_MIGRATIONS_JOB_QUEUE = DEFAULT_PRIORITY_QUEUE
 
 ########## Settings youtube thumbnails scraper tasks ############
-SCRAPE_YOUTUBE_THUMBNAILS_JOB_QUEUE = LOW_PRIORITY_QUEUE
+SCRAPE_YOUTUBE_THUMBNAILS_JOB_QUEUE = DEFAULT_PRIORITY_QUEUE
 
 ###################### VIDEO IMAGE STORAGE ######################
 

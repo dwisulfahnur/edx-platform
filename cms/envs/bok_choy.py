@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 Settings for Bok Choy tests that are used when running Studio.
 
@@ -13,6 +14,7 @@ from the same directory.
 import os
 from path import Path as path
 
+from django.utils.translation import ugettext_lazy
 from openedx.core.release import RELEASE_LINE
 
 ########################## Prod-like settings ###################################
@@ -24,7 +26,7 @@ from openedx.core.release import RELEASE_LINE
 os.environ['SERVICE_VARIANT'] = 'bok_choy_docker' if 'BOK_CHOY_HOSTNAME' in os.environ else 'bok_choy'
 os.environ['CONFIG_ROOT'] = path(__file__).abspath().dirname()
 
-from .aws import *  # pylint: disable=wildcard-import, unused-wildcard-import
+from .production import *  # pylint: disable=wildcard-import, unused-wildcard-import, wrong-import-position
 
 ######################### Testing overrides ####################################
 
@@ -51,6 +53,11 @@ XBLOCK_SETTINGS.update({'VideoDescriptor': {'licensing_enabled': True}})
 
 # Capture the console log via template includes, until webdriver supports log capture again
 CAPTURE_CONSOLE_LOG = True
+
+PLATFORM_NAME = ugettext_lazy(u"édX")
+PLATFORM_DESCRIPTION = ugettext_lazy(u"Open édX Platform")
+STUDIO_NAME = ugettext_lazy(u"Your Platform 𝓢𝓽𝓾𝓭𝓲𝓸")
+STUDIO_SHORT_NAME = ugettext_lazy(u"𝓢𝓽𝓾𝓭𝓲𝓸")
 
 ############################ STATIC FILES #############################
 

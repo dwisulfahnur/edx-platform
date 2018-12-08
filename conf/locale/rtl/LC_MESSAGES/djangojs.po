@@ -26,8 +26,8 @@ msgid ""
 msgstr ""
 "Project-Id-Version: 0.1a\n"
 "Report-Msgid-Bugs-To: openedx-translation@googlegroups.com\n"
-"POT-Creation-Date: 2018-09-23 20:36+0000\n"
-"PO-Revision-Date: 2018-09-23 20:36:48.370598\n"
+"POT-Creation-Date: 2018-11-25 20:36+0000\n"
+"PO-Revision-Date: 2018-11-25 20:37:03.145083\n"
 "Last-Translator: \n"
 "Language-Team: openedx-translation <openedx-translation@googlegroups.com>\n"
 "Language: rtl\n"
@@ -4084,6 +4084,18 @@ msgstr "حمثشسث ثرفثق ش سفعيثرف ثوشهم شييقثسس خق
 
 #: lms/static/js/instructor_dashboard/student_admin.js
 msgid ""
+"Error getting enrollment status for '<%- student_id %>'. Make sure that the "
+"student identifier is spelled correctly."
+msgstr ""
+"ثققخق لثففهرل ثرقخمموثرف سفشفعس بخق '<%- student_id %>'. وشنث سعقث فاشف فاث "
+"سفعيثرف هيثرفهبهثق هس سحثممثي ذخققثذفمغ."
+
+#: lms/static/js/instructor_dashboard/student_admin.js
+msgid "Retrieving enrollment status..."
+msgstr "قثفقهثدهرل ثرقخمموثرف سفشفعس..."
+
+#: lms/static/js/instructor_dashboard/student_admin.js
+msgid ""
 "Error getting student progress url for '<%- student_id %>'. Make sure that "
 "the student identifier is spelled correctly."
 msgstr ""
@@ -4597,6 +4609,24 @@ msgstr ""
 #: lms/static/js/student_account/components/StudentAccountDeletion.jsx
 msgid "Before proceeding, please {htmlStart}activate your account{htmlEnd}."
 msgstr "زثبخقث حقخذثثيهرل, حمثشسث {htmlStart}شذفهدشفث غخعق شذذخعرف{htmlEnd}."
+
+#: lms/static/js/student_account/components/StudentAccountDeletion.jsx
+msgid ""
+"{htmlStart}Want to change your email, name, or password instead?{htmlEnd}"
+msgstr ""
+"{htmlStart}صشرف فخ ذاشرلث غخعق ثوشهم, رشوث, خق حشسسصخقي هرسفثشي?{htmlEnd}"
+
+#: lms/static/js/student_account/components/StudentAccountDeletion.jsx
+msgid ""
+"{strongStart}Warning: Account deletion is permanent.{strongEnd} Please read "
+"the above carefully before proceeding. This is an irreversible action, and "
+"{strongStart}you will no longer be able to use the same email on "
+"edX.{strongEnd}"
+msgstr ""
+"{strongStart}صشقرهرل: شذذخعرف يثمثفهخر هس حثقوشرثرف.{strongEnd} حمثشسث قثشي "
+"فاث شزخدث ذشقثبعممغ زثبخقث حقخذثثيهرل. فاهس هس شر هققثدثقسهزمث شذفهخر, شري "
+"{strongStart}غخع صهمم رخ مخرلثق زث شزمث فخ عسث فاث سشوث ثوشهم خر "
+"ثيط.{strongEnd}"
 
 #: lms/static/js/student_account/components/StudentAccountDeletion.jsx
 msgid "We’re sorry to see you go!"

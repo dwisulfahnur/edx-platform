@@ -32,6 +32,7 @@ import imp
 import sys
 import os
 
+from corsheaders.defaults import default_headers as corsheaders_default_headers
 from path import Path as path
 from django.utils.translation import ugettext_lazy as _
 
@@ -167,7 +168,7 @@ FEATURES = {
 
     # Enable instructor to assign individual due dates
     # Note: In order for this feature to work, you must also add
-    # 'courseware.student_field_overrides.IndividualStudentOverrideProvider' to
+    # 'lms.djangoapps.courseware.student_field_overrides.IndividualStudentOverrideProvider' to
     # the setting FIELD_OVERRIDE_PROVIDERS, in addition to setting this flag to
     # True.
     'INDIVIDUAL_DUE_DATES': False,
@@ -201,9 +202,6 @@ FEATURES = {
 
     # Maximum number of rows to include in the csv file for downloading problem responses.
     'MAX_PROBLEM_RESPONSES_COUNT': 5000,
-
-    # whether to use password policy enforcement or not
-    'ENFORCE_PASSWORD_POLICY': True,
 
     'ENABLED_PAYMENT_REPORTS': [
         "refund_report",
@@ -387,6 +385,9 @@ FEATURES = {
     # that they don't have an account associated with email addresses they believe they've registered with.
     'ENABLE_PASSWORD_RESET_FAILURE_EMAIL': False,
 
+    # Sets the default browser support. For more information go to http://browser-update.org/customize.html
+    'UNSUPPORTED_BROWSER_ALERT_VERSIONS': "{i:10,f:-3,o:-3,s:-3,c:-3}",
+
     # Set this to true to make API docs available at /api-docs/.
     'ENABLE_API_DOCS': False,
 
@@ -516,6 +517,14 @@ OAUTH2_PROVIDER = {
 # This is required for the migrations in oauth_dispatch.models
 # otherwise it fails saying this attribute is not present in Settings
 OAUTH2_PROVIDER_APPLICATION_MODEL = 'oauth2_provider.Application'
+
+# Automatically clean up edx-django-oauth2-provider tokens on use
+OAUTH_DELETE_EXPIRED = True
+OAUTH_ID_TOKEN_EXPIRATION = 60 * 60
+
+################################## THIRD_PARTY_AUTH CONFIGURATION #############################
+TPA_PROVIDER_BURST_THROTTLE = '10/min'
+TPA_PROVIDER_SUSTAINED_THROTTLE = '50/hr'
 
 ################################## TEMPLATE CONFIGURATION #####################################
 # Mako templating
@@ -1077,14 +1086,6 @@ MESSAGE_STORAGE = 'django.contrib.messages.storage.session.SessionStorage'
 # Guidelines for translators
 TRANSLATORS_GUIDE = 'https://edx.readthedocs.org/projects/edx-developer-guide/en/latest/conventions/internationalization/i18n_translators_guide.html'  # pylint: disable=line-too-long
 
-#################################### GITHUB #######################################
-# gitreload is used in LMS-workflow to pull content from github
-# gitreload requests are only allowed from these IP addresses, which are
-# the advertised public IPs of the github WebHook servers.
-# These are listed, eg at https://github.com/edx/edx-platform/admin/hooks
-
-ALLOWED_GITRELOAD_IPS = ['207.97.227.253', '50.57.128.197', '108.171.174.178']
-
 #################################### AWS #######################################
 # S3BotoStorage insists on a timeout for uploaded assets. We should make it
 # permanent instead, but rather than trying to figure out exactly where that
@@ -1209,6 +1210,8 @@ CREDIT_NOTIFICATION_CACHE_TIMEOUT = 5 * 60 * 60
 ################################# Middleware ###################################
 
 MIDDLEWARE_CLASSES = [
+    'openedx.core.lib.x_forwarded_for.middleware.XForwardedForMiddleware',
+
     'crum.CurrentRequestUserMiddleware',
 
     # A newer and safer request cache.
@@ -1221,6 +1224,7 @@ MIDDLEWARE_CLASSES = [
     'django_comment_client.middleware.AjaxExceptionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.contrib.sites.middleware.CurrentSiteMiddleware',
+    'edx_rest_framework_extensions.auth.jwt.middleware.JwtAuthCookieMiddleware',
 
     # Allows us to define redirects via Django admin
     'django_sites_extensions.middleware.RedirectMiddleware',
@@ -1297,7 +1301,7 @@ MIDDLEWARE_CLASSES = [
     # Outputs monitoring metrics for a request.
     'edx_rest_framework_extensions.middleware.RequestMetricsMiddleware',
 
-    'edx_rest_framework_extensions.middleware.EnsureJWTAuthSettingsMiddleware',
+    'edx_rest_framework_extensions.auth.jwt.middleware.EnsureJWTAuthSettingsMiddleware',
 
     # This must be last
     'openedx.core.djangoapps.site_configuration.middleware.SessionCookieDomainOverrideMiddleware',
@@ -1422,7 +1426,6 @@ dashboard_js = (
     sorted(rooted_glob(PROJECT_ROOT / 'static', 'js/dashboard/**/*.js'))
 )
 discussion_js = (
-    rooted_glob(COMMON_ROOT / 'static', 'common/js/discussion/mathjax_include.js') +
     rooted_glob(PROJECT_ROOT / 'static', 'js/customwmd.js') +
     rooted_glob(PROJECT_ROOT / 'static', 'js/mathjax_accessible.js') +
     rooted_glob(PROJECT_ROOT / 'static', 'js/mathjax_delay_renderer.js') +
@@ -1889,7 +1892,6 @@ CELERY_DEFAULT_EXCHANGE_TYPE = 'direct'
 
 HIGH_PRIORITY_QUEUE = 'edx.core.high'
 DEFAULT_PRIORITY_QUEUE = 'edx.core.default'
-LOW_PRIORITY_QUEUE = 'edx.core.low'
 HIGH_MEM_QUEUE = 'edx.core.high_mem'
 
 CELERY_QUEUE_HA_POLICY = 'all'
@@ -1901,7 +1903,6 @@ CELERY_DEFAULT_ROUTING_KEY = DEFAULT_PRIORITY_QUEUE
 
 CELERY_QUEUES = {
     HIGH_PRIORITY_QUEUE: {},
-    LOW_PRIORITY_QUEUE: {},
     DEFAULT_PRIORITY_QUEUE: {},
     HIGH_MEM_QUEUE: {},
 }
@@ -1956,7 +1957,7 @@ BULK_EMAIL_ROUTING_KEY = HIGH_PRIORITY_QUEUE
 
 # We also define a queue for smaller jobs so that large courses don't block
 # smaller emails (see BULK_EMAIL_JOB_SIZE_THRESHOLD setting)
-BULK_EMAIL_ROUTING_KEY_SMALL_JOBS = LOW_PRIORITY_QUEUE
+BULK_EMAIL_ROUTING_KEY_SMALL_JOBS = DEFAULT_PRIORITY_QUEUE
 
 # For emails with fewer than these number of recipients, send them through
 # a different queue to avoid large courses blocking emails that are meant to be
@@ -2034,6 +2035,7 @@ INSTALLED_APPS = [
 
     # Database-backed configuration
     'config_models',
+    'openedx.core.djangoapps.config_model_utils',
     'waffle',
 
     # Monitor the status of services
@@ -2287,6 +2289,8 @@ INSTALLED_APPS = [
     'openedx.features.learner_profile',
     'openedx.features.learner_analytics',
     'openedx.features.portfolio_project',
+    'openedx.features.course_duration_limits',
+    'openedx.features.content_type_gating',
 
     'experiments',
 
@@ -2295,6 +2299,9 @@ INSTALLED_APPS = [
 
     # API Documentation
     'rest_framework_swagger',
+
+    # edx-drf-extensions
+    'csrf.apps.CsrfAppConfig',  # Enables frontend apps to retrieve CSRF tokens.
 ]
 
 ######################### CSRF #########################################
@@ -2503,11 +2510,16 @@ if FEATURES.get('ENABLE_CORS_HEADERS'):
     CORS_ALLOW_CREDENTIALS = True
     CORS_ORIGIN_WHITELIST = ()
     CORS_ORIGIN_ALLOW_ALL = False
+    CORS_ALLOW_HEADERS = corsheaders_default_headers + (
+        'use-jwt-cookie',
+    )
 
 # Default cache expiration for the cross-domain proxy HTML page.
 # This is a static page that can be iframed into an external page
 # to simulate cross-domain requests.
 XDOMAIN_PROXY_CACHE_TIMEOUT = 60 * 15
+
+LOGIN_REDIRECT_WHITELIST = []
 
 ###################### Registration ##################################
 
@@ -2594,11 +2606,23 @@ FINANCIAL_REPORTS = {
 POLICY_CHANGE_TASK_RATE_LIMIT = '300/h'
 
 #### PASSWORD POLICY SETTINGS #####
-PASSWORD_MIN_LENGTH = 8
-PASSWORD_MAX_LENGTH = None
-PASSWORD_COMPLEXITY = {"UPPER": 1, "LOWER": 1, "DIGITS": 1}
-PASSWORD_DICTIONARY_EDIT_DISTANCE_THRESHOLD = None
-PASSWORD_DICTIONARY = []
+AUTH_PASSWORD_VALIDATORS = [
+    {
+        "NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator",
+    },
+    {
+        "NAME": "util.password_policy_validators.MinimumLengthValidator",
+        "OPTIONS": {
+            "min_length": 2
+        }
+    },
+    {
+        "NAME": "util.password_policy_validators.MaximumLengthValidator",
+        "OPTIONS": {
+            "max_length": 75
+        }
+    },
+]
 
 ############################ ORA 2 ############################################
 
@@ -2933,10 +2957,6 @@ DEFAULT_MOBILE_AVAILABLE = True
 # Enrollment API Cache Timeout
 ENROLLMENT_COURSE_DETAILS_CACHE_TIMEOUT = 60
 
-# Automatically clean up edx-django-oauth2-provider tokens on use
-OAUTH_DELETE_EXPIRED = True
-OAUTH_ID_TOKEN_EXPIRATION = 60 * 60
-
 # These tabs are currently disabled
 NOTES_DISABLED_TABS = ['course_structure', 'tags']
 
@@ -3059,13 +3079,13 @@ CHECKPOINT_PATTERN = r'(?P<checkpoint_name>[^/]+)'
 
 # For the fields override feature
 # If using FEATURES['INDIVIDUAL_DUE_DATES'], you should add
-# 'courseware.student_field_overrides.IndividualStudentOverrideProvider' to
+# 'lms.djangoapps.courseware.student_field_overrides.IndividualStudentOverrideProvider' to
 # this setting.
 FIELD_OVERRIDE_PROVIDERS = ()
 
 # Modulestore-level field override providers. These field override providers don't
 # require student context.
-MODULESTORE_FIELD_OVERRIDE_PROVIDERS = ()
+MODULESTORE_FIELD_OVERRIDE_PROVIDERS = ('openedx.features.content_type_gating.field_override.ContentTypeGatingFieldOverride',)  # pylint: disable=line-too-long
 
 # PROFILE IMAGE CONFIG
 # WARNING: Certain django storage backends do not support atomic
@@ -3159,10 +3179,17 @@ JWT_AUTH = {
 
     'JWT_PAYLOAD_GET_USERNAME_HANDLER': lambda d: d.get('username'),
     'JWT_LEEWAY': 1,
-    'JWT_DECODE_HANDLER': 'edx_rest_framework_extensions.utils.jwt_decode_handler',
+    'JWT_DECODE_HANDLER': 'edx_rest_framework_extensions.auth.jwt.decoder.jwt_decode_handler',
 
-    # Number of seconds before JWT tokens expire
+    'JWT_AUTH_COOKIE': 'edx-jwt-cookie',
+
+    # Number of seconds before JWTs expire
     'JWT_EXPIRATION': 30,
+    'JWT_IN_COOKIE_EXPIRATION': 60 * 60,
+
+    'JWT_LOGIN_CLIENT_ID': 'login-service-client-id',
+    'JWT_LOGIN_SERVICE_USERNAME': 'login_service_user',
+
     'JWT_SUPPORTED_VERSION': '1.1.0',
 
     'JWT_ALGORITHM': 'HS256',
@@ -3249,7 +3276,7 @@ AUDIT_CERT_CUTOFF_DATE = None
 ################################ Settings for Credentials Service ################################
 
 CREDENTIALS_SERVICE_USERNAME = 'credentials_service_user'
-CREDENTIALS_GENERATION_ROUTING_KEY = HIGH_PRIORITY_QUEUE
+CREDENTIALS_GENERATION_ROUTING_KEY = DEFAULT_PRIORITY_QUEUE
 
 # Settings for Comprehensive Theming app
 
@@ -3394,12 +3421,17 @@ COURSE_ENROLLMENT_MODES = {
     },
 }
 
+CONTENT_TYPE_GATE_GROUP_IDS = {
+    'limited_access': 1,
+    'full_access': 2,
+}
+
 ############## Settings for the Discovery App ######################
 
 COURSES_API_CACHE_TIMEOUT = 3600  # Value is in seconds
 
 ############## Settings for CourseGraph ############################
-COURSEGRAPH_JOB_QUEUE = LOW_PRIORITY_QUEUE
+COURSEGRAPH_JOB_QUEUE = DEFAULT_PRIORITY_QUEUE
 
 
 # Initialize to 'unknown', but read from JSON in aws.py
@@ -3455,6 +3487,11 @@ RETIREMENT_STATES = [
     'ABORTED',
     'COMPLETE',
 ]
+
+############## Settings for Writable Gradebook  #########################
+# If running a Gradebook container locally,
+# modify lms/envs/private.py to give it a non-null value
+WRITABLE_GRADEBOOK_URL = None
 
 ############### Settings for django-fernet-fields ##################
 FERNET_KEYS = [

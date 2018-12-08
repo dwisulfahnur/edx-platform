@@ -17,7 +17,8 @@ from django.db import transaction
 from django.utils.translation import ugettext as _
 from edx_ace import ace
 from edx_ace.recipient import Recipient
-from edx_rest_framework_extensions.authentication import JwtAuthentication
+from edx_rest_framework_extensions.auth.jwt.authentication import JwtAuthentication
+from edx_rest_framework_extensions.auth.session.authentication import SessionAuthenticationAllowInactiveUser
 from enterprise.models import EnterpriseCourseEnrollment, EnterpriseCustomerUser, PendingEnterpriseCustomerUser
 from integrated_channels.degreed.models import DegreedLearnerDataTransmissionAudit
 from integrated_channels.sap_success_factors.models import SapSuccessFactorsLearnerDataTransmissionAudit
@@ -41,10 +42,7 @@ from openedx.core.djangoapps.course_groups.models import UnregisteredLearnerCoho
 from openedx.core.djangoapps.profile_images.images import remove_profile_images
 from openedx.core.djangoapps.user_api.accounts.image_helpers import get_profile_image_names, set_has_profile_image
 from openedx.core.djangolib.oauth2_retirement_utils import retire_dot_oauth2_models, retire_dop_oauth2_models
-from openedx.core.lib.api.authentication import (
-    OAuth2AuthenticationAllowInactiveUser,
-    SessionAuthenticationAllowInactiveUser
-)
+from openedx.core.lib.api.authentication import OAuth2AuthenticationAllowInactiveUser
 from openedx.core.lib.api.parsers import MergePatchParser
 from student.models import (
     CourseEnrollment,
@@ -77,7 +75,6 @@ from .signals import (
     USER_RETIRE_LMS_CRITICAL,
     USER_RETIRE_LMS_MISC,
     USER_RETIRE_MAILINGS,
-    USER_RETIRE_THIRD_PARTY_MAILINGS
 )
 from ..message_types import DeletionNotificationMessage
 
@@ -335,45 +332,6 @@ class AccountDeactivationView(APIView):
         """
         _set_unusable_password(User.objects.get(username=username))
         return Response(get_account_settings(request, [username])[0])
-
-
-class AccountRetireMailingsView(APIView):
-    """
-    Part of the retirement API, accepts POSTs to unsubscribe a user
-    from all EXTERNAL email lists (ex: Sailthru). LMS email subscriptions
-    are handled in the LMS retirement endpoints.
-    """
-    authentication_classes = (JwtAuthentication, )
-    permission_classes = (permissions.IsAuthenticated, CanRetireUser)
-
-    def post(self, request):
-        """
-        POST /api/user/v1/accounts/{username}/retire_mailings/
-
-        Fires the USER_RETIRE_THIRD_PARTY_MAILINGS signal, currently the
-        only receiver is email_marketing to force opt-out the user from
-        externally managed email lists.
-        """
-        username = request.data['username']
-
-        try:
-            retirement = UserRetirementStatus.get_retirement_for_retirement_action(username)
-
-            with transaction.atomic():
-                # This signal allows lms' email_marketing and other 3rd party email
-                # providers to unsubscribe the user
-                USER_RETIRE_THIRD_PARTY_MAILINGS.send(
-                    sender=self.__class__,
-                    email=retirement.original_email,
-                    new_email=retirement.retired_email,
-                    user=retirement.user
-                )
-
-            return Response(status=status.HTTP_204_NO_CONTENT)
-        except UserRetirementStatus.DoesNotExist:
-            return Response(status=status.HTTP_404_NOT_FOUND)
-        except Exception as exc:  # pylint: disable=broad-except
-            return Response(text_type(exc), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 class DeactivateLogoutView(APIView):
@@ -806,6 +764,39 @@ class AccountRetirementStatusView(ViewSet):
         except Exception as exc:  # pylint: disable=broad-except
             return Response(text_type(exc), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+    def cleanup(self, request):
+        """
+        POST /api/user/v1/accounts/retirement_cleanup/
+
+        {
+            'usernames': ['user1', 'user2', ...]
+        }
+
+        Deletes a batch of retirement requests by username.
+        """
+        try:
+            usernames = request.data['usernames']
+
+            if not isinstance(usernames, list):
+                raise TypeError('Usernames should be an array.')
+
+            complete_state = RetirementState.objects.get(state_name='COMPLETE')
+            retirements = UserRetirementStatus.objects.filter(
+                original_username__in=usernames,
+                current_state=complete_state
+            )
+
+            # Sanity check that they're all valid usernames in the right state
+            if len(usernames) != len(retirements):
+                raise UserRetirementStatus.DoesNotExist('Not all usernames exist in the COMPLETE state.')
+
+            retirements.delete()
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        except (RetirementStateError, UserRetirementStatus.DoesNotExist, TypeError) as exc:
+            return Response(text_type(exc), status=status.HTTP_400_BAD_REQUEST)
+        except Exception as exc:  # pylint: disable=broad-except
+            return Response(text_type(exc), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 
 class LMSAccountRetirementView(ViewSet):
     """
@@ -835,8 +826,7 @@ class LMSAccountRetirementView(ViewSet):
             ArticleRevision.retire_user(retirement.user)
             PendingNameChange.delete_by_user_value(retirement.user, field='user')
             PasswordHistory.retire_user(retirement.user.id)
-            course_enrollments = CourseEnrollment.objects.filter(user=retirement.user)
-            ManualEnrollmentAudit.retire_manual_enrollments(course_enrollments, retirement.retired_email)
+            ManualEnrollmentAudit.retire_manual_enrollments(retirement.user, retirement.retired_email)
 
             CreditRequest.retire_user(retirement)
             ApiAccessRequest.retire_user(retirement.user)

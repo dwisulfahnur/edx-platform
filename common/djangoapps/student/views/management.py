@@ -14,6 +14,7 @@ from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.models import AnonymousUser, User
 from django.contrib.auth.views import password_reset_confirm
+from django.contrib.sites.models import Site
 from django.core import mail
 from django.urls import reverse
 from django.core.validators import ValidationError, validate_email
@@ -29,6 +30,8 @@ from django.utils.http import base36_to_int, urlsafe_base64_encode
 from django.utils.translation import ugettext as _
 from django.views.decorators.csrf import csrf_exempt, ensure_csrf_cookie
 from django.views.decorators.http import require_GET, require_POST, require_http_methods
+from edx_ace import ace
+from edx_ace.recipient import Recipient
 from edx_django_utils import monitoring as monitoring_utils
 from eventtracking import tracker
 from ipware.ip import get_ip
@@ -38,7 +41,6 @@ from opaque_keys.edx.keys import CourseKey
 from pytz import UTC
 from six import text_type
 from xmodule.modulestore.django import modulestore
-
 import track.views
 from course_modes.models import CourseMode
 from edx_ace import ace
@@ -49,6 +51,7 @@ from entitlements.models import CourseEntitlement
 from openedx.core.djangoapps.ace_common.template_context import get_base_template_context
 from openedx.core.djangoapps.catalog.utils import get_programs_with_type
 from openedx.core.djangoapps.embargo import api as embargo_api
+from openedx.core.djangoapps.lang_pref import LANGUAGE_KEY
 from openedx.core.djangoapps.oauth_dispatch.api import destroy_oauth_tokens
 from openedx.core.djangoapps.programs.models import ProgramsApiConfig
 from openedx.core.djangoapps.site_configuration import helpers as configuration_helpers
@@ -71,7 +74,7 @@ from student.helpers import (
     generate_activation_email_context,
     get_next_url_for_login_page
 )
-from student.message_types import PasswordReset
+from student.message_types import EmailChange, PasswordReset
 from student.models import (
     CourseEnrollment,
     PasswordHistory,
@@ -91,7 +94,7 @@ from student.text_me_the_app import TextMeTheAppFragmentView
 from util.bad_request_rate_limiter import BadRequestRateLimiter
 from util.db import outer_atomic
 from util.json_request import JsonResponse
-from util.password_policy_validators import SecurityPolicyError, validate_password
+from util.password_policy_validators import normalize_password, validate_password
 
 log = logging.getLogger("edx.student")
 
@@ -122,8 +125,8 @@ def csrf_token(context):
     token = context.get('csrf_token', '')
     if token == 'NOTPROVIDED':
         return ''
-    return (u'<div style="display:none"><input type="hidden"'
-            ' name="csrfmiddlewaretoken" value="{}" /></div>'.format(token))
+    return (HTML(u'<div style="display:none"><input type="hidden"'
+            ' name="csrfmiddlewaretoken" value="{}" /></div>').format(token))
 
 
 # NOTE: This view is not linked to directly--it is called from
@@ -824,6 +827,16 @@ def password_reset_confirm_wrapper(request, uidb36=None, token=None):
         )
 
     if request.method == 'POST':
+        # We have to make a copy of request.POST because it is a QueryDict object which is immutable until copied.
+        # We have to use request.POST because the password_reset_confirm method takes in the request and a user's
+        # password is set to the request.POST['new_password1'] field. We have to also normalize the new_password2
+        # field so it passes the equivalence check that new_password1 == new_password2
+        # In order to switch out of having to do this copy, we would want to move the normalize_password code into
+        # a custom User model's set_password method to ensure it is always happening upon calling set_password.
+        request.POST = request.POST.copy()
+        request.POST['new_password1'] = normalize_password(request.POST['new_password1'])
+        request.POST['new_password2'] = normalize_password(request.POST['new_password2'])
+
         password = request.POST['new_password1']
 
         try:
@@ -836,7 +849,7 @@ def password_reset_confirm_wrapper(request, uidb36=None, token=None):
                 'validlink': True,
                 'form': None,
                 'title': _('Password reset unsuccessful'),
-                'err_msg': err.message,
+                'err_msg': ' '.join(err.messages),
             }
             context.update(platform_name)
             return TemplateResponse(
@@ -920,24 +933,32 @@ def do_email_change_request(user, new_email, activation_key=None):
     pec.activation_key = activation_key
     pec.save()
 
-    context = {
-        'key': pec.activation_key,
+    use_https = theming_helpers.get_current_request().is_secure()
+
+    site = Site.objects.get_current()
+    message_context = get_base_template_context(site)
+    message_context.update({
         'old_email': user.email,
-        'new_email': pec.new_email
-    }
+        'new_email': pec.new_email,
+        'confirm_link': '{protocol}://{site}{link}'.format(
+            protocol='https' if use_https else 'http',
+            site=configuration_helpers.get_value('SITE_NAME', settings.SITE_NAME),
+            link=reverse('confirm_email_change', kwargs={
+                'key': pec.activation_key,
+            }),
+        ),
+    })
 
-    subject = render_to_string('emails/email_change_subject.txt', context)
-    subject = ''.join(subject.splitlines())
-
-    message = render_to_string('emails/email_change.txt', context)
-
-    from_address = configuration_helpers.get_value(
-        'email_from_address',
-        settings.DEFAULT_FROM_EMAIL
+    msg = EmailChange().personalize(
+        recipient=Recipient(user.username, pec.new_email),
+        language=preferences_api.get_user_preference(user, LANGUAGE_KEY),
+        user_context=message_context,
     )
+
     try:
-        mail.send_mail(subject, message, from_address, [pec.new_email])
+        ace.send(msg)
     except Exception:
+        from_address = configuration_helpers.get_value('email_from_address', settings.DEFAULT_FROM_EMAIL)
         log.error(u'Unable to send email activation link to user from "%s"', from_address, exc_info=True)
         raise ValueError(_('Unable to send email activation link. Please try again later.'))
 
@@ -948,8 +969,8 @@ def do_email_change_request(user, new_email, activation_key=None):
         SETTING_CHANGE_INITIATED,
         {
             "setting": "email",
-            "old": context['old_email'],
-            "new": context['new_email'],
+            "old": message_context['old_email'],
+            "new": message_context['new_email'],
             "user_id": user.id,
         }
     )

@@ -7,6 +7,7 @@ from course_modes.models import (
 from courseware.date_summary import (
     verified_upgrade_deadline_link, verified_upgrade_link_is_valid
 )
+from xmodule.partitions.partitions_service import get_user_partition_groups, get_all_partitions_for_course
 
 
 def check_and_get_upgrade_link_and_date(user, enrollment=None, course=None):
@@ -49,7 +50,15 @@ def get_experiment_user_metadata_context(course, user):
     enrollment_mode = None
     enrollment_time = None
     enrollment = None
+    # TODO: clean up as part of REVO-28 (START)
+    has_non_audit_enrollments = None
+    # TODO: clean up as part of REVO-28 (END)
     try:
+        # TODO: clean up as part of REVO-28 (START)
+        user_enrollments = CourseEnrollment.objects.select_related('course').filter(user_id=user.id)
+        audit_enrollments = user_enrollments.filter(mode='audit')
+        has_non_audit_enrollments = (len(audit_enrollments) != len(user_enrollments))
+        # TODO: clean up as part of REVO-28 (END)
         enrollment = CourseEnrollment.objects.select_related(
             'course'
         ).get(user_id=user.id, course_id=course.id)
@@ -65,6 +74,10 @@ def get_experiment_user_metadata_context(course, user):
     if user.is_authenticated:
         forum_roles = list(Role.objects.filter(users=user, course_id=course.id).values_list('name').distinct())
 
+    # get user partition data
+    partition_groups = get_all_partitions_for_course(course)
+    user_partitions = get_user_partition_groups(course.id, partition_groups, user, 'name')
+
     return {
         'upgrade_link': upgrade_link,
         'upgrade_price': unicode(get_cosmetic_verified_display_price(course)),
@@ -76,5 +89,9 @@ def get_experiment_user_metadata_context(course, user):
         'course_start': course.start,
         'course_end': course.end,
         'has_staff_access': has_staff_access,
-        'forum_roles': forum_roles
+        'forum_roles': forum_roles,
+        'partition_groups': user_partitions,
+        # TODO: clean up as part of REVO-28 (START)
+        'has_non_audit_enrollments': has_non_audit_enrollments,
+        # TODO: clean up as part of REVO-28 (END)
     }

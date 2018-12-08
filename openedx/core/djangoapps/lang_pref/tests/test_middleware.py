@@ -7,13 +7,13 @@ import mock
 
 import ddt
 from django.conf import settings
-from django.test import TestCase
 from django.urls import reverse
 from django.test.client import RequestFactory
 from django.http import HttpResponse
 from django.contrib.sessions.middleware import SessionMiddleware
 from django.utils.translation import LANGUAGE_SESSION_KEY
 from django.utils.translation.trans_real import parse_accept_lang_header
+from openedx.core.djangolib.testing.utils import CacheIsolationTestCase
 
 from openedx.core.djangoapps.lang_pref import LANGUAGE_KEY, COOKIE_DURATION
 from openedx.core.djangoapps.lang_pref.middleware import LanguagePreferenceMiddleware
@@ -23,7 +23,7 @@ from student.tests.factories import AnonymousUserFactory
 
 
 @ddt.ddt
-class TestUserPreferenceMiddleware(TestCase):
+class TestUserPreferenceMiddleware(CacheIsolationTestCase):
     """
     Tests to make sure user preferences are getting properly set in the middleware.
     """

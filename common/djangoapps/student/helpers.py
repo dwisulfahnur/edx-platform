@@ -15,7 +15,6 @@ from django.core.validators import ValidationError
 from django.contrib.auth import load_backend
 from django.contrib.auth.models import User
 from django.db import IntegrityError, transaction
-from django.utils import http
 from django.utils.translation import ugettext as _
 from pytz import UTC
 from six import iteritems, text_type
@@ -37,6 +36,7 @@ from openedx.core.djangoapps.certificates.api import certificates_viewable_for_c
 from openedx.core.djangoapps.site_configuration import helpers as configuration_helpers
 from openedx.core.djangoapps.theming import helpers as theming_helpers
 from openedx.core.djangoapps.theming.helpers import get_themes
+from openedx.core.djangoapps.user_authn.utils import is_safe_login_or_logout_redirect
 from student.models import (
     LinkedInAddToProfileConfiguration,
     PasswordHistory,
@@ -44,8 +44,10 @@ from student.models import (
     UserAttribute,
     UserProfile,
     unique_id_for_user,
-    email_exists_or_retired
+    email_exists_or_retired,
+    username_exists_or_retired
 )
+from util.password_policy_validators import normalize_password
 
 
 # Enumeration of per-course verification statuses
@@ -273,7 +275,7 @@ def get_next_url_for_login_page(request):
 
     If THIRD_PARTY_AUTH_HINT is set, then `tpa_hint=<hint>` is added as a query parameter.
     """
-    redirect_to = get_redirect_to(request)
+    redirect_to = _get_redirect_to(request)
     if not redirect_to:
         try:
             redirect_to = reverse('dashboard')
@@ -308,7 +310,7 @@ def get_next_url_for_login_page(request):
     return redirect_to
 
 
-def get_redirect_to(request):
+def _get_redirect_to(request):
     """
     Determine the redirect url and return if safe
     :argument
@@ -325,7 +327,7 @@ def get_redirect_to(request):
     # get information about a user on edx.org. In any such case drop the parameter.
     if redirect_to:
         mime_type, _ = mimetypes.guess_type(redirect_to, strict=False)
-        if not http.is_safe_url(redirect_to, allowed_hosts={request.get_host()}, require_https=True):
+        if not is_safe_login_or_logout_redirect(request, redirect_to):
             log.warning(
                 u'Unsafe redirect parameter detected after login page: %(redirect_to)r',
                 {"redirect_to": redirect_to}
@@ -411,6 +413,7 @@ def authenticate_new_user(request, username, password):
     logged in until they close the browser. They can't log in again until they click
     the activation link from the email.
     """
+    password = normalize_password(password)
     backend = load_backend(NEW_USER_AUTH_BACKEND)
     user = backend.authenticate(request=request, username=username, password=password)
     user.backend = NEW_USER_AUTH_BACKEND
@@ -609,7 +612,8 @@ def do_create_account(form, custom_form=None):
         email=form.cleaned_data["email"],
         is_active=False
     )
-    user.set_password(form.cleaned_data["password"])
+    password = normalize_password(form.cleaned_data["password"])
+    user.set_password(password)
     registration = Registration()
 
     # TODO: Rearrange so that if part of the process fails, the whole process fails.
@@ -628,7 +632,7 @@ def do_create_account(form, custom_form=None):
         # AccountValidationError and a consistent user message returned (i.e. both should
         # return "It looks like {username} belongs to an existing account. Try again with a
         # different username.")
-        if User.objects.filter(username=user.username):
+        if username_exists_or_retired(user.username):
             raise AccountValidationError(
                 USERNAME_EXISTS_MSG_FMT.format(username=proposed_username),
                 field="username"

@@ -4,6 +4,7 @@ import json
 import unittest
 from datetime import datetime
 from importlib import import_module
+import unicodedata
 
 import ddt
 import mock
@@ -14,6 +15,7 @@ from django.urls import reverse
 from django.test import TestCase, TransactionTestCase
 from django.test.client import RequestFactory
 from django.test.utils import override_settings
+from django.contrib.auth.hashers import make_password
 
 from django_comment_common.models import ForumsConfig
 from notification_prefs import NOTIFICATION_PREF_KEY
@@ -99,7 +101,7 @@ class TestCreateAccount(SiteMixin, TestCase):
         self.params = {
             "username": self.username,
             "email": "test@example.org",
-            "password": "testpass",
+            "password": u"testpass",
             "name": "Test User",
             "honor_code": "true",
             "terms_of_service": "true",
@@ -129,6 +131,22 @@ class TestCreateAccount(SiteMixin, TestCase):
         self.assertEqual(response.status_code, 200)
         user = User.objects.get(username=self.username)
         return user.profile
+
+    def test_create_account_and_normalize_password(self):
+        """
+        Test that unicode normalization on passwords is happening when a user registers.
+        """
+        # Set user password to NFKD format so that we can test that it is normalized to
+        # NFKC format upon account creation.
+        self.params['password'] = unicodedata.normalize('NFKD', u'Ṗŕệṿïệẅ Ṯệẍt')
+        response = self.client.post(self.url, self.params)
+        self.assertEqual(response.status_code, 200)
+
+        user = User.objects.get(username=self.username)
+        salt_val = user.password.split('$')[1]
+
+        expected_user_password = make_password(unicodedata.normalize('NFKC', u'Ṗŕệṿïệẅ Ṯệẍt'), salt_val)
+        self.assertEqual(expected_user_password, user.password)
 
     def test_marketing_cookie(self):
         response = self.client.post(self.url, self.params)
@@ -163,8 +181,8 @@ class TestCreateAccount(SiteMixin, TestCase):
         "Microsites not implemented in this environment"
     )
     @override_settings(LMS_SEGMENT_KEY="testkey")
-    @mock.patch('openedx.core.djangoapps.user_authn.views.register.analytics.track')
-    @mock.patch('openedx.core.djangoapps.user_authn.views.register.analytics.identify')
+    @mock.patch('openedx.core.djangoapps.user_authn.views.register.segment.track')
+    @mock.patch('openedx.core.djangoapps.user_authn.views.register.segment.identify')
     def test_segment_tracking(self, mock_segment_identify, _):
         year = datetime.now().year
         year_of_birth = year - 14
@@ -637,10 +655,14 @@ class TestCreateAccountValidation(TestCase):
         del params["email"]
         assert_email_error("A properly formatted e-mail is required")
 
-        # Empty, too short
-        for email in ["", "a"]:
-            params["email"] = email
-            assert_email_error("A properly formatted e-mail is required")
+        # Empty
+        params["email"] = ""
+        assert_email_error("A properly formatted e-mail is required")
+
+        #too short
+        params["email"] = "a"
+        assert_email_error("A properly formatted e-mail is required "
+                           "Ensure this value has at least 3 characters (it has 1).")
 
         # Too long
         params["email"] = '{email}@example.com'.format(
@@ -703,18 +725,21 @@ class TestCreateAccountValidation(TestCase):
 
         # Missing
         del params["password"]
-        assert_password_error("A valid password is required")
+        assert_password_error("This field is required.")
 
-        # Empty, too short
-        for password in ["", "a"]:
-            params["password"] = password
-            assert_password_error("A valid password is required")
+        # Empty
+        params["password"] = ""
+        assert_password_error("This field is required.")
+
+        # Too short
+        params["password"] = "a"
+        assert_password_error("This password is too short. It must contain at least 2 characters.")
 
         # Password policy is tested elsewhere
 
         # Matching username
         params["username"] = params["password"] = "test_username_and_password"
-        assert_password_error("Password cannot be the same as the username.")
+        assert_password_error("The password is too similar to the username.")
 
     def test_name(self):
         params = dict(self.minimal_params)
