@@ -23,7 +23,12 @@ class CanRetireUser(permissions.BasePermission):
     retire a User account.
     """
     def has_permission(self, request, view):
-        return (
-            request.user.username == settings.RETIREMENT_SERVICE_WORKER_USERNAME or
-            request.user.is_superuser
-        )
+        return request.user.has_perm('accounts.can_retire_user')
+
+
+class CanReplaceUsername(permissions.BasePermission):
+    """
+    Grants access to the Username Replacement API for the service user.
+    """
+    def has_permission(self, request, view):
+        return request.user.username == getattr(settings, "USERNAME_REPLACEMENT_WORKER", False)

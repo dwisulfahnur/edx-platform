@@ -6,7 +6,6 @@ import datetime
 import json
 import logging
 
-import dogstats_wrapper as dog_stats_api
 from django.conf import settings
 from django.contrib.auth import login as django_login
 from django.contrib.auth.models import User
@@ -133,26 +132,19 @@ def create_account_with_params(request, params):
             ]}
         )
 
-    do_external_auth, eamap = pre_account_creation_external_auth(request, params)
-
     extended_profile_fields = configuration_helpers.get_value('extended_profile_fields', [])
     # Can't have terms of service for certain SHIB users, like at Stanford
     registration_fields = getattr(settings, 'REGISTRATION_EXTRA_FIELDS', {})
     tos_required = (
         registration_fields.get('terms_of_service') != 'hidden' or
         registration_fields.get('honor_code') != 'hidden'
-    ) and (
-        not settings.FEATURES.get("AUTH_USE_SHIB") or
-        not settings.FEATURES.get("SHIB_DISABLE_TOS") or
-        not do_external_auth or
-        not eamap.external_domain.startswith(settings.SHIBBOLETH_DOMAIN_PREFIX)
     )
 
     form = AccountCreationForm(
         data=params,
         extra_fields=extra_fields,
         extended_profile_fields=extended_profile_fields,
-        do_third_party_auth=do_external_auth,
+        do_third_party_auth=False,
         tos_required=tos_required,
     )
     custom_form = get_registration_extension_form(data=params)
@@ -170,11 +162,9 @@ def create_account_with_params(request, params):
         django_login(request, new_user)
         request.session.set_expiry(0)
 
-        post_account_creation_external_auth(do_external_auth, eamap, new_user)
-
     # Check if system is configured to skip activation email for the current user.
     skip_email = _skip_activation_email(
-        user, do_external_auth, running_pipeline, third_party_provider,
+        user, running_pipeline, third_party_provider,
     )
 
     if skip_email:
@@ -191,9 +181,7 @@ def create_account_with_params(request, params):
         try:
             enable_notifications(user)
         except Exception:  # pylint: disable=broad-except
-            log.exception("Enable discussion notifications failed for user {id}.".format(id=user.id))
-
-    dog_stats_api.increment("common.student.account_created")
+            log.exception(u"Enable discussion notifications failed for user {id}.".format(id=user.id))
 
     _track_user_registration(user, profile, params, third_party_provider)
 
@@ -214,51 +202,6 @@ def create_account_with_params(request, params):
         AUDIT_LOG.info(u"Login success on new account creation - {0}".format(new_user.username))
 
     return new_user
-
-
-def pre_account_creation_external_auth(request, params):
-    """
-    External auth related setup before account is created.
-    """
-    # If doing signup for an external authorization, then get email, password, name from the eamap
-    # don't use the ones from the form, since the user could have hacked those
-    # unless originally we didn't get a valid email or name from the external auth
-    # TODO: We do not check whether these values meet all necessary criteria, such as email length
-    do_external_auth = 'ExternalAuthMap' in request.session
-    eamap = None
-    if do_external_auth:
-        eamap = request.session['ExternalAuthMap']
-        try:
-            validate_email(eamap.external_email)
-            params["email"] = eamap.external_email
-        except ValidationError:
-            pass
-        if len(eamap.external_name.strip()) >= accounts_settings.NAME_MIN_LENGTH:
-            params["name"] = eamap.external_name
-        params["password"] = eamap.internal_password
-        log.debug(u'In create_account with external_auth: user = %s, email=%s', params["name"], params["email"])
-
-    return do_external_auth, eamap
-
-
-def post_account_creation_external_auth(do_external_auth, eamap, new_user):
-    """
-    External auth related updates after account is created.
-    """
-    if do_external_auth:
-        eamap.user = new_user
-        eamap.dtsignup = datetime.datetime.now(UTC)
-        eamap.save()
-        AUDIT_LOG.info(u"User registered with external_auth %s", new_user.username)
-        AUDIT_LOG.info(u'Updated ExternalAuthMap for %s to be %s', new_user.username, eamap)
-
-        if settings.FEATURES.get('BYPASS_ACTIVATION_EMAIL_FOR_EXTAUTH'):
-            log.info('bypassing activation email')
-            new_user.is_active = True
-            new_user.save()
-            AUDIT_LOG.info(
-                u"Login activated on extauth account - {0} ({1})".format(new_user.username, new_user.email)
-            )
 
 
 def _link_user_to_third_party_provider(
@@ -285,7 +228,7 @@ def _link_user_to_third_party_provider(
         if not social_access_token:
             raise ValidationError({
                 'access_token': [
-                    _("An access_token is required when passing value ({}) for provider.").format(
+                    _(u"An access_token is required when passing value ({}) for provider.").format(
                         params['provider']
                     )
                 ]
@@ -338,19 +281,24 @@ def _track_user_registration(user, profile, params, third_party_provider):
                 }
             })
 
+        # .. pii: Many pieces of PII are sent to Segment here. Retired directly through Segment API call in Tubular.
+        # .. pii_types: email_address, username, name, birth_date, location, gender
+        # .. pii_retirement: third_party
         segment.identify(*identity_args)
         segment.track(
             user.id,
             "edx.bi.user.account.registered",
             {
                 'category': 'conversion',
+                # ..pii: Learner email is sent to Segment in following line and will be associated with analytics data.
+                'email': user.email,
                 'label': params.get('course_id'),
                 'provider': third_party_provider.name if third_party_provider else None
             },
         )
 
 
-def _skip_activation_email(user, do_external_auth, running_pipeline, third_party_provider):
+def _skip_activation_email(user, running_pipeline, third_party_provider):
     """
     Return `True` if activation email should be skipped.
 
@@ -368,7 +316,6 @@ def _skip_activation_email(user, do_external_auth, running_pipeline, third_party
 
     Arguments:
         user (User): Django User object for the current user.
-        do_external_auth (bool): True if external authentication is in progress.
         running_pipeline (dict): Dictionary containing user and pipeline data for third party authentication.
         third_party_provider (ProviderConfig): An instance of third party provider configuration.
 
@@ -393,7 +340,7 @@ def _skip_activation_email(user, do_external_auth, running_pipeline, third_party
     # log the cases where skip activation email flag is set, but email validity check fails
     if third_party_provider and third_party_provider.skip_email_verification and not valid_email:
         log.info(
-            '[skip_email_verification=True][user=%s][pipeline-email=%s][identity_provider=%s][provider_type=%s] '
+            u'[skip_email_verification=True][user=%s][pipeline-email=%s][identity_provider=%s][provider_type=%s] '
             'Account activation email sent as user\'s system email differs from SSO email.',
             user.email,
             sso_pipeline_email,
@@ -404,7 +351,6 @@ def _skip_activation_email(user, do_external_auth, running_pipeline, third_party
     return (
         settings.FEATURES.get('SKIP_EMAIL_VALIDATION', None) or
         settings.FEATURES.get('AUTOMATIC_AUTH_FOR_TESTING') or
-        (settings.FEATURES.get('BYPASS_ACTIVATION_EMAIL_FOR_EXTAUTH') and do_external_auth) or
         (third_party_provider and third_party_provider.skip_email_verification and valid_email)
     )
 

@@ -11,7 +11,7 @@ structure:
     'definition.children': <list of all child text_type(location)s>
 }
 """
-
+import six
 import copy
 from datetime import datetime
 from importlib import import_module
@@ -57,7 +57,10 @@ log = logging.getLogger(__name__)
 new_contract('CourseKey', CourseKey)
 new_contract('AssetKey', AssetKey)
 new_contract('AssetMetadata', AssetMetadata)
-new_contract('long', long)
+if six.PY2:
+    new_contract('long', long)
+else:
+    new_contract('long', int)
 new_contract('BlockUsageLocator', BlockUsageLocator)
 
 # sort order that returns DRAFT items first
@@ -1025,7 +1028,7 @@ class MongoModuleStore(ModuleStoreDraftAndPublished, ModuleStoreWriteBase, Mongo
                 course_queries.append(course_query)
             query = {'$or': course_queries}
         elif course_org_filter:
-                query['_id.org'] = course_org_filter
+            query['_id.org'] = course_org_filter
 
         course_records = self.collection.find(query, {'metadata': True})
 
@@ -1856,7 +1859,7 @@ class MongoModuleStore(ModuleStoreDraftAndPublished, ModuleStoreWriteBase, Mongo
         # Build an update set with potentially multiple embedded fields.
         updates_by_type = {}
         for asset_type, assets in assets_by_type.iteritems():
-            updates_by_type[self._make_mongo_asset_key(asset_type)] = assets.as_list()
+            updates_by_type[self._make_mongo_asset_key(asset_type)] = list(assets)
 
         # Update the document.
         self.asset_collection.update(

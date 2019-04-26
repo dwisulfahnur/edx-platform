@@ -226,6 +226,15 @@ class CommentsServiceMockMixin(object):
             status=status
         )
 
+    def register_get_username_replacement_response(self, user, status=200, body=""):
+        assert httpretty.is_enabled(), 'httpretty must be enabled to mock calls.'
+        httpretty.register_uri(
+            httpretty.POST,
+            "http://localhost:4567/api/v1/users/{id}/replace_username".format(id=user.id),
+            body=body,
+            status=status
+        )
+
     def register_subscribed_threads_response(self, user, threads, page, num_pages):
         """Register a mock response for GET on the CS user instance endpoint"""
         assert httpretty.is_enabled(), 'httpretty must be enabled to mock calls.'
@@ -489,7 +498,7 @@ class ProfileImageTestMixin(object):
     Mixin with utility methods for user profile image
     """
 
-    TEST_PROFILE_IMAGE_UPLOADED_AT = datetime(2002, 1, 9, 15, 43, 01, tzinfo=UTC)
+    TEST_PROFILE_IMAGE_UPLOADED_AT = datetime(2002, 1, 9, 15, 43, 1, tzinfo=UTC)
 
     def create_profile_image(self, user, storage):
         """

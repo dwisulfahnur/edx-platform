@@ -15,7 +15,7 @@ from .models import ContentTypeGatingConfig
 class ContentTypeGatingConfigAdmin(StackedConfigModelAdmin):
     fieldsets = (
         ('Context', {
-            'fields': ('site', 'org', 'course'),
+            'fields': ContentTypeGatingConfig.KEY_FIELDS,
             'description': _(
                 'These define the context to enable course duration limits on. '
                 'If no values are set, then the configuration applies globally. '
@@ -36,5 +36,6 @@ class ContentTypeGatingConfigAdmin(StackedConfigModelAdmin):
             ),
         })
     )
+    raw_id_fields = ('course',)
 
 admin.site.register(ContentTypeGatingConfig, ContentTypeGatingConfigAdmin)

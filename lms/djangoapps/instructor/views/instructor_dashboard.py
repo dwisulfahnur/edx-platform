@@ -10,8 +10,8 @@ from urlparse import urljoin
 import pytz
 from django.conf import settings
 from django.contrib.auth.decorators import login_required
-from django.urls import reverse
 from django.http import Http404, HttpResponseServerError
+from django.urls import reverse
 from django.utils.html import escape
 from django.utils.translation import ugettext as _
 from django.utils.translation import ugettext_noop
@@ -26,6 +26,14 @@ from xblock.field_data import DictFieldData
 from xblock.fields import ScopeIds
 
 from bulk_email.models import BulkEmailFlag
+from class_dashboard.dashboard_data import get_array_section_has_problem, get_section_display_name
+from course_modes.models import CourseMode, CourseModesArchive
+from courseware.access import has_access
+from courseware.courses import get_course_by_id, get_studio_url
+from django_comment_client.utils import available_division_schemes, has_forum_access
+from django_comment_common.models import FORUM_ROLE_ADMINISTRATOR, CourseDiscussionSettings
+from edxmako.shortcuts import render_to_response
+from edx_when.api import is_enabled_for_course
 from lms.djangoapps.certificates import api as certs_api
 from lms.djangoapps.certificates.models import (
     CertificateGenerationConfiguration,
@@ -35,15 +43,8 @@ from lms.djangoapps.certificates.models import (
     CertificateWhitelist,
     GeneratedCertificate
 )
-from class_dashboard.dashboard_data import get_array_section_has_problem, get_section_display_name
-from course_modes.models import CourseMode, CourseModesArchive
-from courseware.access import has_access
-from courseware.courses import get_course_by_id, get_studio_url
-from django_comment_client.utils import available_division_schemes, has_forum_access
-from django_comment_common.models import FORUM_ROLE_ADMINISTRATOR, CourseDiscussionSettings
-from edxmako.shortcuts import render_to_response
 from lms.djangoapps.courseware.module_render import get_module_by_usage_id
-from lms.djangoapps.grades.config.waffle import waffle_flags, WRITABLE_GRADEBOOK
+from lms.djangoapps.grades.config.waffle import WRITABLE_GRADEBOOK, waffle_flags
 from openedx.core.djangoapps.course_groups.cohorts import DEFAULT_COHORT_NAME, get_course_cohorts, is_course_cohorted
 from openedx.core.djangoapps.site_configuration import helpers as configuration_helpers
 from openedx.core.djangoapps.verified_track_content.models import VerifiedTrackCohortedCourse
@@ -52,7 +53,7 @@ from openedx.core.lib.url_utils import quote_slashes
 from openedx.core.lib.xblock_utils import wrap_xblock
 from shoppingcart.models import Coupon, CourseRegCodeItem, PaidCourseRegistration
 from student.models import CourseEnrollment
-from student.roles import CourseFinanceAdminRole, CourseSalesAdminRole, CourseStaffRole, CourseInstructorRole
+from student.roles import CourseFinanceAdminRole, CourseInstructorRole, CourseSalesAdminRole, CourseStaffRole
 from util.json_request import JsonResponse
 from xmodule.html_module import HtmlDescriptor
 from xmodule.modulestore.django import modulestore
@@ -136,10 +137,10 @@ def instructor_dashboard_2(request, course_id):
     if show_analytics_dashboard_message(course_key):
         # Construct a URL to the external analytics dashboard
         analytics_dashboard_url = '{0}/courses/{1}'.format(settings.ANALYTICS_DASHBOARD_URL, unicode(course_key))
-        link_start = HTML("<a href=\"{}\" target=\"_blank\">").format(analytics_dashboard_url)
+        link_start = HTML(u"<a href=\"{}\" target=\"_blank\">").format(analytics_dashboard_url)
         analytics_dashboard_message = _(
-            "To gain insights into student enrollment and participation {link_start}"
-            "visit {analytics_dashboard_name}, our new course analytics product{link_end}."
+            u"To gain insights into student enrollment and participation {link_start}"
+            u"visit {analytics_dashboard_name}, our new course analytics product{link_end}."
         )
         analytics_dashboard_message = Text(analytics_dashboard_message).format(
             link_start=link_start, link_end=HTML("</a>"), analytics_dashboard_name=settings.ANALYTICS_DASHBOARD_NAME)
@@ -159,7 +160,7 @@ def instructor_dashboard_2(request, course_id):
             unicode(course_key), len(paid_modes)
         )
 
-    if settings.FEATURES.get('INDIVIDUAL_DUE_DATES') and access['instructor']:
+    if access['instructor'] and is_enabled_for_course(course_key, request=request):
         sections.insert(3, _section_extensions(course))
 
     # Gate access to course email by feature flag & by course-specific authorization
@@ -310,13 +311,15 @@ def _section_e_commerce(course, access, paid_mode, coupons_enabled, reports_enab
 
 def _section_special_exams(course, access):
     """ Provide data for the corresponding dashboard section """
-    course_key = course.id
+    course_key = unicode(course.id)
+    from edx_proctoring.api import is_backend_dashboard_available
 
     section_data = {
         'section_key': 'special_exams',
         'section_display_name': _('Special Exams'),
         'access': access,
-        'course_id': unicode(course_key)
+        'course_id': course_key,
+        'show_dashboard': is_backend_dashboard_available(course_key),
     }
     return section_data
 
@@ -420,7 +423,7 @@ def set_course_mode_price(request, course_id):
     course_honor_mode = CourseMode.objects.filter(mode_slug='honor', course_id=course_key)
     if not course_honor_mode:
         return JsonResponse(
-            {'message': _("CourseMode with the mode slug({mode_slug}) DoesNotExist").format(mode_slug='honor')},
+            {'message': _(u"CourseMode with the mode slug({mode_slug}) DoesNotExist").format(mode_slug='honor')},
             status=400)  # status code 400: Bad Request
 
     CourseModesArchive.objects.create(
@@ -462,7 +465,7 @@ def _section_course_info(course, access):
         #  dashboard_link is already made safe in _get_dashboard_link
         dashboard_link = _get_dashboard_link(course_key)
         #  so we can use Text() here so it's not double-escaped and rendering HTML on the front-end
-        message = Text(_("Enrollment data is now available in {dashboard_link}.")).format(dashboard_link=dashboard_link)
+        message = Text(_(u"Enrollment data is now available in {dashboard_link}.")).format(dashboard_link=dashboard_link)
         section_data['enrollment_message'] = message
 
     if settings.FEATURES.get('ENABLE_SYSADMIN_DASHBOARD'):
@@ -470,7 +473,7 @@ def _section_course_info(course, access):
 
     try:
         sorted_cutoffs = sorted(course.grade_cutoffs.items(), key=lambda i: i[1], reverse=True)
-        advance = lambda memo, (letter, score): "{}: {}, ".format(letter, score) + memo
+        advance = lambda memo, (letter, score): u"{}: {}, ".format(letter, score) + memo
         section_data['grade_cutoffs'] = reduce(advance, sorted_cutoffs, "")[:-2]
     except Exception:  # pylint: disable=broad-except
         section_data['grade_cutoffs'] = "Not Available"
@@ -708,7 +711,7 @@ def _section_send_email(course, access):
 
 def _get_dashboard_link(course_key):
     """ Construct a URL to the external analytics dashboard """
-    analytics_dashboard_url = '{0}/courses/{1}'.format(settings.ANALYTICS_DASHBOARD_URL, unicode(course_key))
+    analytics_dashboard_url = u'{0}/courses/{1}'.format(settings.ANALYTICS_DASHBOARD_URL, unicode(course_key))
     link = HTML(u"<a href=\"{0}\" target=\"_blank\">{1}</a>").format(
         analytics_dashboard_url, settings.ANALYTICS_DASHBOARD_NAME
     )

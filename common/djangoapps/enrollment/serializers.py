@@ -1,6 +1,8 @@
 """
 Serializers for all Course Enrollment related return objects.
 """
+from __future__ import absolute_import
+
 import logging
 
 from rest_framework import serializers
@@ -80,6 +82,21 @@ class CourseEnrollmentSerializer(serializers.ModelSerializer):
         model = CourseEnrollment
         fields = ('created', 'mode', 'is_active', 'course_details', 'user')
         lookup_field = 'username'
+
+
+class CourseEnrollmentsApiListSerializer(CourseEnrollmentSerializer):
+    """
+    Serializes CourseEnrollment model and returns a subset of fields returned
+    by the CourseEnrollmentSerializer.
+    """
+    course_id = serializers.CharField(source='course_overview.id')
+
+    def __init__(self, *args, **kwargs):
+        super(CourseEnrollmentsApiListSerializer, self).__init__(*args, **kwargs)
+        self.fields.pop('course_details')
+
+    class Meta(CourseEnrollmentSerializer.Meta):
+        fields = CourseEnrollmentSerializer.Meta.fields + ('course_id', )
 
 
 class ModeSerializer(serializers.Serializer):

@@ -3,12 +3,10 @@ Tests for Blocks api.py
 """
 
 from itertools import product
+from mock import patch
 
 import ddt
 from django.test.client import RequestFactory
-from django.test.utils import override_settings
-
-import course_blocks.api as course_blocks_api
 
 from openedx.core.djangoapps.content.block_structure.api import clear_course_from_cache
 from openedx.core.djangoapps.content.block_structure.config import STORAGE_BACKING_FOR_CACHE, waffle
@@ -16,6 +14,7 @@ from student.tests.factories import UserFactory
 from xmodule.modulestore import ModuleStoreEnum
 from xmodule.modulestore.tests.django_utils import SharedModuleStoreTestCase
 from xmodule.modulestore.tests.factories import SampleCourseFactory, check_mongo_calls
+from xmodule.modulestore.tests.sample_courses import BlockInfo
 
 
 from ..api import get_blocks
@@ -25,7 +24,6 @@ class TestGetBlocks(SharedModuleStoreTestCase):
     """
     Tests for the get_blocks function
     """
-    shard = 4
 
     @classmethod
     def setUpClass(cls):
@@ -109,12 +107,59 @@ class TestGetBlocks(SharedModuleStoreTestCase):
             self.assertEqual(block['type'], 'problem')
 
 
+# TODO: Remove this class after REVE-52 lands and old-mobile-app traffic falls to < 5% of mobile traffic
+@ddt.ddt
+class TestGetBlocksMobileHack(SharedModuleStoreTestCase):
+    """
+    Tests that requests from the mobile app don't receive empty containers.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        super(TestGetBlocksMobileHack, cls).setUpClass()
+        with cls.store.default_store(ModuleStoreEnum.Type.split):
+            cls.course = SampleCourseFactory.create(
+                block_info_tree=[
+                    BlockInfo('empty_chapter', 'chapter', {}, [
+                        BlockInfo('empty_sequential', 'sequential', {}, [
+                            BlockInfo('empty_vertical', 'vertical', {}, []),
+                        ]),
+                    ]),
+                    BlockInfo('full_chapter', 'chapter', {}, [
+                        BlockInfo('full_sequential', 'sequential', {}, [
+                            BlockInfo('full_vertical', 'vertical', {}, [
+                                BlockInfo('html', 'html', {}, []),
+                            ]),
+                        ]),
+                    ])
+                ]
+            )
+
+    def setUp(self):
+        super(TestGetBlocksMobileHack, self).setUp()
+        self.user = UserFactory.create()
+        self.request = RequestFactory().get("/dummy")
+        self.request.user = self.user
+
+    @ddt.data(
+        *product([True, False], ['chapter', 'sequential', 'vertical'])
+    )
+    @ddt.unpack
+    def test_empty_containers(self, is_mobile, container_type):
+        with patch('lms.djangoapps.course_api.blocks.api.is_request_from_mobile_app', return_value=is_mobile):
+            blocks = get_blocks(self.request, self.course.location)
+        full_container_key = self.course.id.make_usage_key(container_type, 'full_{}'.format(container_type))
+        self.assertIn(str(full_container_key), blocks['blocks'])
+        empty_container_key = self.course.id.make_usage_key(container_type, 'empty_{}'.format(container_type))
+        assert_containment = self.assertNotIn if is_mobile else self.assertIn
+        assert_containment(str(empty_container_key), blocks['blocks'])
+
+
 @ddt.ddt
 class TestGetBlocksQueryCountsBase(SharedModuleStoreTestCase):
     """
     Base for the get_blocks tests.
     """
-    shard = 4
 
     ENABLED_SIGNALS = ['course_published']
 
@@ -147,7 +192,6 @@ class TestGetBlocksQueryCounts(TestGetBlocksQueryCountsBase):
     """
     Tests query counts for the get_blocks function.
     """
-    shard = 4
 
     @ddt.data(
         *product(
@@ -162,7 +206,7 @@ class TestGetBlocksQueryCounts(TestGetBlocksQueryCountsBase):
             self._get_blocks(
                 course,
                 expected_mongo_queries=0,
-                expected_sql_queries=8 if with_storage_backing else 7,
+                expected_sql_queries=12 if with_storage_backing else 11,
             )
 
     @ddt.data(
@@ -179,58 +223,9 @@ class TestGetBlocksQueryCounts(TestGetBlocksQueryCountsBase):
             clear_course_from_cache(course.id)
 
             if with_storage_backing:
-                num_sql_queries = 18
+                num_sql_queries = 22
             else:
-                num_sql_queries = 8
-
-            self._get_blocks(
-                course,
-                expected_mongo_queries,
-                expected_sql_queries=num_sql_queries,
-            )
-
-
-@ddt.ddt
-@override_settings(FIELD_OVERRIDE_PROVIDERS=(course_blocks_api.INDIVIDUAL_STUDENT_OVERRIDE_PROVIDER, ))
-class TestQueryCountsWithIndividualOverrideProvider(TestGetBlocksQueryCountsBase):
-    """
-    Tests query counts for the get_blocks function when IndividualStudentOverrideProvider is set.
-    """
-    shard = 4
-
-    @ddt.data(
-        *product(
-            (ModuleStoreEnum.Type.mongo, ModuleStoreEnum.Type.split),
-            (True, False),
-        )
-    )
-    @ddt.unpack
-    def test_query_counts_cached(self, store_type, with_storage_backing):
-        with waffle().override(STORAGE_BACKING_FOR_CACHE, active=with_storage_backing):
-            course = self._create_course(store_type)
-            self._get_blocks(
-                course,
-                expected_mongo_queries=0,
-                expected_sql_queries=9 if with_storage_backing else 8,
-            )
-
-    @ddt.data(
-        *product(
-            ((ModuleStoreEnum.Type.mongo, 5), (ModuleStoreEnum.Type.split, 3)),
-            (True, False),
-        )
-    )
-    @ddt.unpack
-    def test_query_counts_uncached(self, store_type_tuple, with_storage_backing):
-        store_type, expected_mongo_queries = store_type_tuple
-        with waffle().override(STORAGE_BACKING_FOR_CACHE, active=with_storage_backing):
-            course = self._create_course(store_type)
-            clear_course_from_cache(course.id)
-
-            if with_storage_backing:
-                num_sql_queries = 19
-            else:
-                num_sql_queries = 9
+                num_sql_queries = 12
 
             self._get_blocks(
                 course,

@@ -5,6 +5,8 @@ import datetime
 import ddt
 import mock
 
+from django.test import override_settings
+
 from lms.djangoapps.certificates.tests.factories import GeneratedCertificateFactory
 from lms.djangoapps.certificates.api import is_passing_status
 from lms.envs.test import CREDENTIALS_PUBLIC_SERVICE_URL
@@ -13,7 +15,10 @@ from django.conf import settings
 from django.urls import reverse
 from django.test.client import RequestFactory
 from opaque_keys.edx.locator import CourseLocator
+from openedx.features.learner_profile import REDIRECT_TO_PROFILE_MICROFRONTEND
 from openedx.features.learner_profile.views.learner_profile import learner_profile_context
+from openedx.core.djangoapps.site_configuration.tests.mixins import SiteMixin
+from openedx.core.djangoapps.waffle_utils.testutils import override_waffle_flag
 from student.tests.factories import CourseEnrollmentFactory, UserFactory
 from util.testing import UrlResetMixin
 from xmodule.modulestore.tests.django_utils import ModuleStoreTestCase
@@ -21,7 +26,7 @@ from xmodule.modulestore.tests.factories import CourseFactory
 
 
 @ddt.ddt
-class LearnerProfileViewTest(UrlResetMixin, ModuleStoreTestCase):
+class LearnerProfileViewTest(SiteMixin, UrlResetMixin, ModuleStoreTestCase):
     """ Tests for the student profile view. """
 
     USERNAME = "username"
@@ -111,10 +116,31 @@ class LearnerProfileViewTest(UrlResetMixin, ModuleStoreTestCase):
         for attribute in self.CONTEXT_DATA:
             self.assertIn(attribute, response.content)
 
+    def test_redirect_view(self):
+        profile_url = "http://profile-spa/abc/"
+        with override_settings(PROFILE_MICROFRONTEND_URL=profile_url):
+            with override_waffle_flag(REDIRECT_TO_PROFILE_MICROFRONTEND, active=True):
+                profile_path = reverse('learner_profile', kwargs={'username': self.USERNAME})
+
+                # Test with waffle flag active, site setting disabled
+                response = self.client.get(path=profile_path)
+                for attribute in self.CONTEXT_DATA:
+                    self.assertIn(attribute, response.content)
+
+                # Test with waffle flag active, site setting enabled
+                site_domain = 'othersite.example.com'
+                self.set_up_site(site_domain, {
+                    'SITE_NAME': site_domain,
+                    'ENABLE_PROFILE_MICROFRONTEND': True
+                })
+                self.client.login(username=self.USERNAME, password=self.PASSWORD)
+                response = self.client.get(path=profile_path)
+                self.assertRedirects(response, profile_url + self.USERNAME, target_status_code=404)
+
     def test_records_link(self):
         profile_path = reverse('learner_profile', kwargs={'username': self.USERNAME})
         response = self.client.get(path=profile_path)
-        self.assertContains(response, '<a href="{}/records/">'.format(CREDENTIALS_PUBLIC_SERVICE_URL))
+        self.assertContains(response, u'<a href="{}/records/">'.format(CREDENTIALS_PUBLIC_SERVICE_URL))
 
     def test_undefined_profile_page(self):
         """
@@ -146,7 +172,7 @@ class LearnerProfileViewTest(UrlResetMixin, ModuleStoreTestCase):
 
         response = self.client.get('/u/{username}'.format(username=self.user.username))
 
-        self.assertContains(response, 'card certificate-card mode-{cert_mode}'.format(cert_mode=cert_mode))
+        self.assertContains(response, u'card certificate-card mode-{cert_mode}'.format(cert_mode=cert_mode))
 
     @ddt.data(
         ['downloadable', True],
@@ -167,9 +193,9 @@ class LearnerProfileViewTest(UrlResetMixin, ModuleStoreTestCase):
         response = self.client.get('/u/{username}'.format(username=self.user.username))
 
         if is_passed_status:
-            self.assertContains(response, 'card certificate-card mode-{cert_mode}'.format(cert_mode=cert.mode))
+            self.assertContains(response, u'card certificate-card mode-{cert_mode}'.format(cert_mode=cert.mode))
         else:
-            self.assertNotContains(response, 'card certificate-card mode-{cert_mode}'.format(cert_mode=cert.mode))
+            self.assertNotContains(response, u'card certificate-card mode-{cert_mode}'.format(cert_mode=cert.mode))
 
     def test_certificate_for_missing_course(self):
         """
@@ -181,7 +207,7 @@ class LearnerProfileViewTest(UrlResetMixin, ModuleStoreTestCase):
 
         response = self.client.get('/u/{username}'.format(username=self.user.username))
 
-        self.assertNotContains(response, 'card certificate-card mode-{cert_mode}'.format(cert_mode=cert.mode))
+        self.assertNotContains(response, u'card certificate-card mode-{cert_mode}'.format(cert_mode=cert.mode))
 
     @ddt.data(True, False)
     def test_no_certificate_visibility(self, own_profile):
@@ -221,4 +247,4 @@ class LearnerProfileViewTest(UrlResetMixin, ModuleStoreTestCase):
 
         response = self.client.get('/u/{username}'.format(username=self.user.username))
 
-        self.assertNotContains(response, 'card certificate-card mode-{cert_mode}'.format(cert_mode=cert.mode))
+        self.assertNotContains(response, u'card certificate-card mode-{cert_mode}'.format(cert_mode=cert.mode))

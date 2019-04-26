@@ -5,7 +5,6 @@ End-to-end tests for the Account Settings page.
 from datetime import datetime
 from unittest import skip
 
-import pytest
 from bok_choy.page_object import XSS_INJECTION
 from pytz import timezone, utc
 
@@ -23,6 +22,8 @@ class AccountSettingsTestMixin(EventsTestMixin, AcceptanceTest):
     CHANGE_INITIATED_EVENT_NAME = u"edx.user.settings.change_initiated"
     USER_SETTINGS_CHANGED_EVENT_NAME = 'edx.user.settings.changed'
     ACCOUNT_SETTINGS_REFERER = u"/account/settings"
+
+    shard = 23
 
     def visit_account_settings_page(self, gdpr=False):
         """
@@ -401,25 +402,6 @@ class AccountSettingsPageTest(AccountSettingsTestMixin, AcceptanceTest):
             actual_events
         )
 
-    def test_year_of_birth_field(self):
-        """
-        Test behaviour of "Year of Birth" field.
-        """
-        # Note that when we clear the year_of_birth here we're firing an event.
-        self.assertEqual(self.account_settings_page.value_for_dropdown_field('year_of_birth', '', focus_out=True), '')
-
-        expected_events = [
-            self.expected_settings_changed_event('year_of_birth', None, 1980),
-            self.expected_settings_changed_event('year_of_birth', 1980, None),
-        ]
-        with self.assert_events_match_during(self.settings_changed_event_filter, expected_events):
-            self._test_dropdown_field(
-                u'year_of_birth',
-                u'Year of Birth',
-                u'',
-                [u'1980', u''],
-            )
-
     def test_country_field(self):
         """
         Test behaviour of "Country or Region" field.
@@ -553,11 +535,11 @@ class AccountSettingsDeleteAccountTest(AccountSettingsTestMixin, AcceptanceTest)
         )
 
 
-@pytest.mark.a11y
 class AccountSettingsA11yTest(AccountSettingsTestMixin, AcceptanceTest):
     """
     Class to test account settings accessibility.
     """
+    a11y = True
 
     def test_account_settings_a11y(self):
         """
@@ -565,4 +547,10 @@ class AccountSettingsA11yTest(AccountSettingsTestMixin, AcceptanceTest):
         """
         self.log_in_as_unique_user()
         self.visit_account_settings_page()
+        self.account_settings_page.a11y_audit.config.set_rules({
+            "ignore": [
+                'aria-valid-attr',  # TODO: LEARNER-6611 & LEARNER-6865
+                'region',  # TODO: AC-932
+            ]
+        })
         self.account_settings_page.a11y_audit.check_for_accessibility_errors()

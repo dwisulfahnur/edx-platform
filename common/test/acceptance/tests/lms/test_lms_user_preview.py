@@ -426,6 +426,7 @@ class CourseWithContentGroupsTest(StaffViewTest):
                 'color-contrast',  # TODO: AC-559
                 'link-href',  # TODO: AC-559
                 'section',  # TODO: AC-559
+                'region',  # TODO: AC-932
             ]
         })
         course_page.a11y_audit.check_for_accessibility_errors()
@@ -435,8 +436,8 @@ def verify_expected_problem_visibility(test, courseware_page, expected_problems)
     """
     Helper method that checks that the expected problems are visible on the current page.
     """
-    test.assertEqual(
-        len(expected_problems), courseware_page.num_xblock_components, "Incorrect number of visible problems"
+    courseware_page.wait_for(
+        lambda: courseware_page.num_xblock_components == len(expected_problems), "Expected number of problems visible"
     )
     for index, expected_problem in enumerate(expected_problems):
         test.assertIn(expected_problem, courseware_page.xblock_components[index].text)

@@ -3,6 +3,8 @@ Enrollment API for creating, updating, and deleting enrollments. Also provides a
 course level, such as available course modes.
 
 """
+from __future__ import absolute_import
+
 import importlib
 import logging
 
@@ -464,6 +466,15 @@ def unenroll_user_from_all_courses(user_id):
     :return: The IDs of all of the organizations from which the learner was unenrolled.
     """
     return _data_api().unenroll_user_from_all_courses(user_id)
+
+
+def get_user_roles(user_id):
+    """
+    Returns a list of all roles that this user has.
+    :param user_id: The id of the selected user.
+    :return: All roles for all courses that this user has.
+    """
+    return _data_api().get_user_roles(user_id)
 
 
 def _data_api():

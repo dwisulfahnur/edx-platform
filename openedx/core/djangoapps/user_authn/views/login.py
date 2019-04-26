@@ -20,16 +20,11 @@ from ratelimitbackend.exceptions import RateLimitException
 from edxmako.shortcuts import render_to_response
 from openedx.core.djangoapps.user_authn.cookies import set_logged_in_cookies, refresh_jwt_cookies
 from openedx.core.djangoapps.user_authn.exceptions import AuthFailedError
-import openedx.core.djangoapps.external_auth.views
-from openedx.core.djangoapps.external_auth.models import ExternalAuthMap
 from openedx.core.djangoapps.password_policy import compliance as password_policy_compliance
 from openedx.core.djangoapps.site_configuration import helpers as configuration_helpers
 from openedx.core.djangoapps.util.user_messages import PageLevelMessages
 from openedx.core.djangolib.markup import HTML, Text
-from student.models import (
-    LoginFailures,
-    PasswordHistory,
-)
+from student.models import LoginFailures
 from student.views import send_reactivation_email_for_user
 from student.forms import send_password_reset_email_for_user
 from track import segment
@@ -58,30 +53,20 @@ def _do_third_party_auth(request):
     except User.DoesNotExist:
         AUDIT_LOG.info(
             u"Login failed - user with username {username} has no social auth "
-            "with backend_name {backend_name}".format(
+            u"with backend_name {backend_name}".format(
                 username=username, backend_name=backend_name)
         )
-        message = _(
-            "You've successfully logged into your {provider_name} account, "
-            "but this account isn't linked with an {platform_name} account yet."
-        ).format(
-            platform_name=platform_name,
-            provider_name=requested_provider.name,
-        )
-        message += "<br/><br/>"
-        message += _(
-            "Use your {platform_name} username and password to log into {platform_name} below, "
-            "and then link your {platform_name} account with {provider_name} from your dashboard."
-        ).format(
-            platform_name=platform_name,
-            provider_name=requested_provider.name,
-        )
-        message += "<br/><br/>"
-        message += Text(_(
-            "If you don't have an {platform_name} account yet, "
-            "click {register_label_strong} at the top of the page."
+        message = Text(_(
+            u"You've successfully signed in to your {provider_name} account, "
+            u"but this account isn't linked with your {platform_name} account yet. {blank_lines}"
+            u"Use your {platform_name} username and password to sign in to {platform_name} below, "
+            u"and then link your {platform_name} account with {provider_name} from your dashboard. {blank_lines}"
+            u"If you don't have an account on {platform_name} yet, "
+            u"click {register_label_strong} at the top of the page."
         )).format(
+            blank_lines=HTML('<br/><br/>'),
             platform_name=platform_name,
+            provider_name=requested_provider.name,
             register_label_strong=HTML('<strong>{register_text}</strong>').format(
                 register_text=_('Register')
             )
@@ -108,22 +93,6 @@ def _get_user_by_email(request):
             AUDIT_LOG.warning(u"Login failed - Unknown user email: {0}".format(email))
 
 
-def _check_shib_redirect(user):
-    """
-    See if the user has a linked shibboleth account, if so, redirect the user to shib-login.
-    This behavior is pretty much like what gmail does for shibboleth.  Try entering some @stanford.edu
-    address into the Gmail login.
-    """
-    if settings.FEATURES.get('AUTH_USE_SHIB') and user:
-        try:
-            eamap = ExternalAuthMap.objects.get(user=user)
-            if eamap.external_domain.startswith(openedx.core.djangoapps.external_auth.views.SHIBBOLETH_DOMAIN_PREFIX):
-                raise AuthFailedError('', redirect=reverse('shib-login'))
-        except ExternalAuthMap.DoesNotExist:
-            # This is actually the common case, logging in user without external linked login
-            AUDIT_LOG.info(u"User %s w/o external auth attempting login", user)
-
-
 def _check_excessive_login_attempts(user):
     """
     See if account has been locked out due to excessive login failures
@@ -132,16 +101,6 @@ def _check_excessive_login_attempts(user):
         if LoginFailures.is_user_locked_out(user):
             raise AuthFailedError(_('This account has been temporarily locked due '
                                     'to excessive login failures. Try again later.'))
-
-
-def _check_forced_password_reset(user):
-    """
-    See if the user must reset his/her password due to any policy settings
-    """
-    if user and PasswordHistory.should_user_reset_password_now(user):
-        raise AuthFailedError(_('Your password has expired due to password policy on this account. You must '
-                                'reset your password before you can log in again. Please click the '
-                                '"Forgot Password" link on this page to reset your password before logging in again.'))
 
 
 def _enforce_password_policy_compliance(request, user):
@@ -171,16 +130,19 @@ def _generate_not_activated_message(user):
         'PLATFORM_NAME',
         settings.PLATFORM_NAME
     )
-
-    not_activated_msg_template = _('In order to sign in, you need to activate your account.<br /><br />'
-                                   'We just sent an activation link to <strong>{email}</strong>.  If '
-                                   'you do not receive an email, check your spam folders or '
-                                   '<a href="{support_url}">contact {platform} Support</a>.')
-
-    not_activated_message = not_activated_msg_template.format(
-        email=user.email,
-        support_url=support_url,
-        platform=platform_name
+    not_activated_message = Text(_(
+        u'In order to sign in, you need to activate your account.{blank_lines}'
+        u'We just sent an activation link to {email_strong}. If '
+        u'you do not receive an email, check your spam folders or '
+        u'{link_start}contact {platform_name} Support{link_end}.'
+    )).format(
+        platform_name=platform_name,
+        blank_lines=HTML('<br/><br/>'),
+        email_strong=HTML('<strong>{email}</strong>').format(email=user.email),
+        link_start=HTML(u'<a href="{support_url}">').format(
+            support_url=support_url,
+        ),
+        link_end=HTML("</a>"),
     )
 
     return not_activated_message
@@ -273,6 +235,9 @@ def _track_user_login(user, request):
     """
     Sends a tracking event for a successful login.
     """
+    # .. pii: Username and email are sent to Segment here. Retired directly through Segment API call in Tubular.
+    # .. pii_types: email_address, username
+    # .. pii_retirement: third_party
     segment.identify(
         user.id,
         {
@@ -357,9 +322,7 @@ def login_user(request):
         else:
             email_user = _get_user_by_email(request)
 
-        _check_shib_redirect(email_user)
         _check_excessive_login_attempts(email_user)
-        _check_forced_password_reset(email_user)
 
         possibly_authenticated_user = email_user
 
@@ -399,9 +362,12 @@ def login_user(request):
 @csrf_exempt
 @require_http_methods(['POST'])
 def login_refresh(request):
+    if not request.user.is_authenticated or request.user.is_anonymous:
+        return JsonResponse('Unauthorized', status=401)
+
     try:
         response = JsonResponse({'success': True})
-        return refresh_jwt_cookies(request, response)
+        return refresh_jwt_cookies(request, response, request.user)
     except AuthFailedError as error:
         log.exception(error.get_response())
         return JsonResponse(error.get_response(), status=400)

@@ -43,7 +43,7 @@ class SubsectionGradeBase(object):
         Returns whether any problem in this subsection
         was attempted by the student.
         """
-
+        # pylint: disable=no-member
         assert self.all_total is not None, (
             "SubsectionGrade not fully populated yet.  Call init_from_structure or init_from_model "
             "before use."
@@ -182,24 +182,43 @@ class NonZeroSubsectionGrade(SubsectionGradeBase):
                     block,
                 )
 
+    @staticmethod
+    def _aggregated_score_from_model(grade_model, is_graded):
+        """
+        Helper method that returns `AggregatedScore` objects based on
+        the values in the given `grade_model`.  If the given model
+        has an associated override, the values from the override are
+        used instead.
+        """
+        score_type = 'graded' if is_graded else 'all'
+        earned_value = getattr(grade_model, 'earned_{}'.format(score_type))
+        possible_value = getattr(grade_model, 'possible_{}'.format(score_type))
+        if hasattr(grade_model, 'override'):
+            score_type = 'graded_override' if is_graded else 'all_override'
+
+            earned_override = getattr(grade_model.override, 'earned_{}'.format(score_type))
+            if earned_override is not None:
+                earned_value = earned_override
+
+            possible_override = getattr(grade_model.override, 'possible_{}'.format(score_type))
+            if possible_override is not None:
+                possible_value = possible_override
+
+        return AggregatedScore(
+            tw_earned=earned_value,
+            tw_possible=possible_value,
+            graded=is_graded,
+            first_attempted=grade_model.first_attempted,
+        )
+
 
 class ReadSubsectionGrade(NonZeroSubsectionGrade):
     """
     Class for Subsection grades that are read from the database.
     """
     def __init__(self, subsection, model, factory):
-        all_total = AggregatedScore(
-            tw_earned=model.earned_all,
-            tw_possible=model.possible_all,
-            graded=False,
-            first_attempted=model.first_attempted,
-        )
-        graded_total = AggregatedScore(
-            tw_earned=model.earned_graded,
-            tw_possible=model.possible_graded,
-            graded=True,
-            first_attempted=model.first_attempted,
-        )
+        all_total = self._aggregated_score_from_model(model, is_graded=False)
+        graded_total = self._aggregated_score_from_model(model, is_graded=True)
         override = model.override if hasattr(model, 'override') else None
 
         # save these for later since we compute problem_scores lazily
@@ -216,6 +235,7 @@ class ReadSubsectionGrade(NonZeroSubsectionGrade):
         It means we look through the user-specific subtree of this subsection,
         taking into account which problems are visible to the user.
         """
+        # pylint: disable=protected-access
         problem_scores = OrderedDict()
         for block in self.model.visible_blocks.blocks:
             problem_score = self._compute_block_score(
@@ -253,7 +273,17 @@ class CreateSubsectionGrade(NonZeroSubsectionGrade):
         Saves or updates the subsection grade in a persisted model.
         """
         if self._should_persist_per_attempted(score_deleted, force_update_subsections):
-            return PersistentSubsectionGrade.update_or_create_grade(**self._persisted_model_params(student))
+            model = PersistentSubsectionGrade.update_or_create_grade(**self._persisted_model_params(student))
+
+            if hasattr(model, 'override'):
+                # When we're doing an update operation, the PersistentSubsectionGrade model
+                # will be updated based on the problem_scores, but if a grade override
+                # exists that's related to the updated persistent grade, we need to update
+                # the aggregated scores for this object to reflect the override.
+                self.all_total = self._aggregated_score_from_model(model, is_graded=False)
+                self.graded_total = self._aggregated_score_from_model(model, is_graded=True)
+
+            return model
 
     @classmethod
     def bulk_create_models(cls, student, subsection_grades, course_key):

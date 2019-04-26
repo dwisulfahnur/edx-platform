@@ -22,7 +22,6 @@ class SplitTestTransformerTestCase(CourseStructureTestCase):
     """
     TEST_PARTITION_ID = 0
     TRANSFORMER_CLASS_TO_TEST = UserPartitionTransformer
-    shard = 3
 
     def setUp(self):
         """
@@ -178,7 +177,7 @@ class SplitTestTransformerTestCase(CourseStructureTestCase):
         #  parents. However, we don't think this is a use case we need to
         #  support for split_test components (since they are now deprecated
         #  in favor of content groups and user partitions).
-        (0, ('course', 'A', 'D', 'E', 'H', 'L', 'O', 'P',)),
+        (0, ('course', 'A', 'D', 'E', 'H', 'L', 'O', 'P', )),
         (1, ('course', 'A', 'D', 'F', 'J', 'M', 'I',)),
         (2, ('course', 'A', 'D', 'G', 'O',)),
     )

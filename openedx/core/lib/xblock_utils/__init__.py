@@ -2,28 +2,29 @@
 Functions that can are used to modify XBlock fragments for use in the LMS and Studio
 """
 
+from __future__ import absolute_import
 import datetime
 import json
 import logging
-import markupsafe
 import re
-import static_replace
 import uuid
+import static_replace
+import markupsafe
 from lxml import html, etree
 from contracts import contract
 
 from django.conf import settings
-from django.contrib.staticfiles.storage import staticfiles_storage
 from django.urls import reverse
-from pytz import UTC
 from django.utils.html import escape
 from django.contrib.auth.models import User
+from django.contrib.staticfiles.storage import staticfiles_storage
+from pytz import UTC
 from edxmako.shortcuts import render_to_string
-from six import text_type
 from web_fragments.fragment import Fragment
 from xblock.core import XBlock
 from xblock.exceptions import InvalidScopeError
 from xblock.scorable import ScorableXBlockMixin
+from opaque_keys.edx.asides import AsideUsageKeyV1, AsideUsageKeyV2
 
 from xmodule.seq_module import SequenceModule
 from xmodule.util.xmodule_django import add_webpack_to_fragment
@@ -31,6 +32,8 @@ from xmodule.vertical_block import VerticalBlock
 from xmodule.x_module import shim_xmodule_js, XModuleDescriptor, XModule, PREVIEW_VIEWS, STUDIO_VIEW
 
 import webpack_loader.utils
+import six
+from six import text_type
 
 log = logging.getLogger(__name__)
 
@@ -141,7 +144,7 @@ def wrap_xblock(
         'classes': css_classes,
         'display_name': block.display_name_with_default_escaped,  # xss-lint: disable=python-deprecated-display-name
         'data_attributes': u' '.join(u'data-{}="{}"'.format(markupsafe.escape(key), markupsafe.escape(value))
-                                     for key, value in data.iteritems()),
+                                     for key, value in six.iteritems(data)),
     }
 
     if hasattr(frag, 'json_init_args') and frag.json_init_args is not None:
@@ -164,7 +167,8 @@ def wrap_xblock_aside(
         context,                        # pylint: disable=unused-argument
         usage_id_serializer,
         request_token,                   # pylint: disable=redefined-outer-name
-        extra_data=None
+        extra_data=None,
+        extra_classes=None
 ):
     """
     Wraps the results of rendering an XBlockAside view in a standard <section> with identifying
@@ -180,6 +184,7 @@ def wrap_xblock_aside(
     :param request_token: An identifier that is unique per-request, so that only xblocks
         rendered as part of this request will have their javascript initialized.
     :param extra_data: A dictionary with extra data values to be set on the wrapper
+    :param extra_classes: A list with extra classes to be set on the wrapper element
     """
 
     if extra_data is None:
@@ -196,6 +201,8 @@ def wrap_xblock_aside(
         ),
         'xblock_asides-v1'
     ]
+    if extra_classes:
+        css_classes.extend(extra_classes)
 
     if frag.js_init_fn:
         data['init'] = frag.js_init_fn
@@ -210,7 +217,7 @@ def wrap_xblock_aside(
         'content': frag.content,
         'classes': css_classes,
         'data_attributes': u' '.join(u'data-{}="{}"'.format(markupsafe.escape(key), markupsafe.escape(value))
-                                     for key, value in data.iteritems()),
+                                     for key, value in six.iteritems(data)),
     }
 
     if hasattr(frag, 'json_init_args') and frag.json_init_args is not None:
@@ -274,7 +281,7 @@ def grade_histogram(module_id):
     from django.db import connection
     cursor = connection.cursor()
 
-    query = """\
+    query = u"""\
         SELECT courseware_studentmodule.grade,
         COUNT(courseware_studentmodule.student_id)
         FROM courseware_studentmodule
@@ -298,7 +305,7 @@ def sanitize_html_id(html_id):
     return sanitized_html_id
 
 
-@contract(user=User, block=XBlock, view=basestring, frag=Fragment, context="dict|None")
+@contract(user=User, block=XBlock, view=six.string_types[0], frag=Fragment, context="dict|None")
 def add_staff_markup(user, disable_staff_debug_info, block, view, frag, context):  # pylint: disable=unused-argument
     """
     Updates the supplied module with a new get_html function that wraps
@@ -513,3 +520,31 @@ def xblock_resource_pkg(block):
         return module_name
 
     return module_name.rsplit('.', 1)[0]
+
+
+def is_xblock_aside(usage_key):
+    """
+    Returns True if the given usage key is for an XBlock aside
+
+    Args:
+        usage_key (opaque_keys.edx.keys.UsageKey): A usage key
+
+    Returns:
+        bool: Whether or not the usage key is an aside key type
+    """
+    return isinstance(usage_key, (AsideUsageKeyV1, AsideUsageKeyV2))
+
+
+def get_aside_from_xblock(xblock, aside_type):
+    """
+    Gets an instance of an XBlock aside from the XBlock that it's decorating. This also
+    configures the aside instance with the runtime and fields of the given XBlock.
+
+    Args:
+        xblock (xblock.core.XBlock): The XBlock that the desired aside is decorating
+        aside_type (str): The aside type
+
+    Returns:
+        xblock.core.XBlockAside: Instance of an xblock aside
+    """
+    return xblock.runtime.get_aside_of_type(xblock, aside_type)

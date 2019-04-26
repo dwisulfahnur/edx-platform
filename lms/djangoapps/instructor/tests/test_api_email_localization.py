@@ -4,8 +4,8 @@ Unit tests for the localization of emails sent by instructor.api methods.
 """
 
 from django.core import mail
-from django.urls import reverse
 from django.test.utils import override_settings
+from django.urls import reverse
 from six import text_type
 
 from courseware.tests.factories import InstructorFactory
@@ -22,7 +22,6 @@ class TestInstructorAPIEnrollmentEmailLocalization(SharedModuleStoreTestCase):
     Test whether the enroll, unenroll and beta role emails are sent in the
     proper language, i.e: the student's language.
     """
-    shard = 1
 
     @classmethod
     def setUpClass(cls):

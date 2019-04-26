@@ -3,27 +3,34 @@ The Enrollment API Views should be simple, lean HTTP endpoints for API access. T
 consist primarily of authentication, request validation, and serialization.
 
 """
+from __future__ import absolute_import
+
 import logging
 
+from six import text_type
+
 from course_modes.models import CourseMode
-from django.core.exceptions import ObjectDoesNotExist
+from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.utils.decorators import method_decorator
 from edx_rest_framework_extensions.auth.jwt.authentication import JwtAuthentication
 from edx_rest_framework_extensions.auth.session.authentication import SessionAuthenticationAllowInactiveUser
 from enrollment import api
 from enrollment.errors import CourseEnrollmentError, CourseEnrollmentExistsError, CourseModeNotFoundError
+from enrollment.forms import CourseEnrollmentsApiListForm
+from enrollment.paginators import CourseEnrollmentsApiListPagination
+from enrollment.serializers import CourseEnrollmentsApiListSerializer
 from opaque_keys import InvalidKeyError
 from opaque_keys.edx.keys import CourseKey
-
 from openedx.core.djangoapps.cors_csrf.authentication import SessionAuthenticationCrossDomainCsrf
 from openedx.core.djangoapps.cors_csrf.decorators import ensure_csrf_cookie_cross_domain
+from openedx.core.djangoapps.course_groups.cohorts import CourseUserGroup, add_user_to_cohort, get_cohort_by_name
 from openedx.core.djangoapps.embargo import api as embargo_api
 from openedx.core.djangoapps.user_api.accounts.permissions import CanRetireUser
 from openedx.core.djangoapps.user_api.models import UserRetirementStatus
 from openedx.core.djangoapps.user_api.preferences.api import update_email_opt_in
-from openedx.core.djangoapps.course_groups.cohorts import add_user_to_cohort, get_cohort_by_name, CourseUserGroup
 from openedx.core.lib.api.authentication import OAuth2AuthenticationAllowInactiveUser
 from openedx.core.lib.api.permissions import ApiKeyHeaderPermission, ApiKeyHeaderPermissionIsAuthenticated
+from openedx.core.lib.api.view_utils import DeveloperErrorViewMixin
 from openedx.core.lib.exceptions import CourseNotFoundError
 from openedx.core.lib.log_utils import audit_log
 from openedx.features.enterprise_support.api import (
@@ -33,12 +40,12 @@ from openedx.features.enterprise_support.api import (
     enterprise_enabled
 )
 from rest_framework import permissions, status
+from rest_framework.generics import ListAPIView
 from rest_framework.response import Response
 from rest_framework.throttling import UserRateThrottle
 from rest_framework.views import APIView
-from six import text_type
 from student.auth import user_has_role
-from student.models import User
+from student.models import CourseEnrollment, User
 from student.roles import CourseStaffRole, GlobalStaff
 from util.disable_rate_limit import can_disable_rate_limit
 
@@ -203,6 +210,67 @@ class EnrollmentView(APIView, ApiKeyPermissionMixIn):
                     ).format(username=username, course_id=course_id)
                 }
             )
+
+
+class EnrollmentUserRolesView(APIView):
+    """
+    **Use Case**
+
+        Get the roles for the current logged-in user.
+        A field is also included to indicate whether or not the user is a global
+        staff member.
+        If an optional course_id parameter is supplied, the returned roles will be
+        filtered to only include roles for the given course.
+
+    **Example Requests**
+
+        GET /api/enrollment/v1/roles/?course_id={course_id}
+
+        course_id: (optional) A course id. The returned roles will be filtered to
+        only include roles for the given course.
+
+    **Response Values**
+
+        If the request is successful, an HTTP 200 "OK" response is
+        returned along with a collection of user roles for the
+        logged-in user, filtered by course_id if given, along with
+        whether or not the user is global staff
+    """
+    authentication_classes = (JwtAuthentication,
+                              OAuth2AuthenticationAllowInactiveUser,
+                              EnrollmentCrossDomainSessionAuth)
+    permission_classes = ApiKeyHeaderPermissionIsAuthenticated,
+    throttle_classes = EnrollmentUserThrottle,
+
+    @method_decorator(ensure_csrf_cookie_cross_domain)
+    def get(self, request):
+        """
+        Gets a list of all roles for the currently logged-in user, filtered by course_id if supplied
+        """
+        try:
+            course_id = request.GET.get('course_id')
+            roles_data = api.get_user_roles(request.user.username)
+            if course_id:
+                roles_data = [role for role in roles_data if text_type(role.course_id) == course_id]
+        except Exception:
+            return Response(
+                status=status.HTTP_400_BAD_REQUEST,
+                data={
+                    "message": (
+                        u"An error occurred while retrieving roles for user '{username}"
+                    ).format(username=request.user.username)
+                }
+            )
+        return Response({
+            'roles': [
+                {
+                    "org": role.org,
+                    "course_id": text_type(role.course_id),
+                    "role": role.role
+                }
+                for role in roles_data],
+            'is_staff': request.user.is_staff,
+        })
 
 
 @can_disable_rate_limit
@@ -664,33 +732,30 @@ class EnrollmentListView(APIView, ApiKeyPermissionMixIn):
                 enterprise_api_client = EnterpriseApiServiceClient()
                 consent_client = ConsentApiServiceClient()
                 try:
-                    enterprise_api_client.post_enterprise_course_enrollment(username, unicode(course_id), None)
+                    enterprise_api_client.post_enterprise_course_enrollment(username, text_type(course_id), None)
                 except EnterpriseApiException as error:
                     log.exception("An unexpected error occurred while creating the new EnterpriseCourseEnrollment "
                                   "for user [%s] in course run [%s]", username, course_id)
                     raise CourseEnrollmentError(text_type(error))
                 kwargs = {
                     'username': username,
-                    'course_id': unicode(course_id),
+                    'course_id': text_type(course_id),
                     'enterprise_customer_uuid': explicit_linked_enterprise,
                 }
                 consent_client.provide_consent(**kwargs)
 
             enrollment_attributes = request.data.get('enrollment_attributes')
-            enrollment = api.get_enrollment(username, unicode(course_id))
+            enrollment = api.get_enrollment(username, text_type(course_id))
             mode_changed = enrollment and mode is not None and enrollment['mode'] != mode
             active_changed = enrollment and is_active is not None and enrollment['is_active'] != is_active
             missing_attrs = []
-            audit_with_order = False
             if enrollment_attributes:
                 actual_attrs = [
                     u"{namespace}:{name}".format(**attr)
                     for attr in enrollment_attributes
                 ]
                 missing_attrs = set(REQUIRED_ATTRIBUTES.get(mode, [])) - set(actual_attrs)
-                audit_with_order = mode == 'audit' and 'order:order_number' in actual_attrs
-            # Remove audit_with_order when no longer needed - implemented for REV-141
-            if has_api_key_permissions and (mode_changed or active_changed or audit_with_order):
+            if has_api_key_permissions and (mode_changed or active_changed):
                 if mode_changed and active_changed and not is_active:
                     # if the requester wanted to deactivate but specified the wrong mode, fail
                     # the request (on the assumption that the requester had outdated information
@@ -710,7 +775,7 @@ class EnrollmentListView(APIView, ApiKeyPermissionMixIn):
 
                 response = api.update_enrollment(
                     username,
-                    unicode(course_id),
+                    text_type(course_id),
                     mode=mode,
                     is_active=is_active,
                     enrollment_attributes=enrollment_attributes,
@@ -721,7 +786,7 @@ class EnrollmentListView(APIView, ApiKeyPermissionMixIn):
                 # Will reactivate inactive enrollments.
                 response = api.add_enrollment(
                     username,
-                    unicode(course_id),
+                    text_type(course_id),
                     mode=mode,
                     is_active=is_active,
                     enrollment_attributes=enrollment_attributes
@@ -730,7 +795,11 @@ class EnrollmentListView(APIView, ApiKeyPermissionMixIn):
             cohort_name = request.data.get('cohort')
             if cohort_name is not None:
                 cohort = get_cohort_by_name(course_id, cohort_name)
-                add_user_to_cohort(cohort, user)
+                try:
+                    add_user_to_cohort(cohort, user)
+                except ValueError:
+                    # user already in cohort, probably because they were un-enrolled and re-enrolled
+                    log.exception('Cohort re-addition')
             email_opt_in = request.data.get('email_opt_in', None)
             if email_opt_in is not None:
                 org = course_id.org
@@ -779,13 +848,108 @@ class EnrollmentListView(APIView, ApiKeyPermissionMixIn):
         finally:
             # Assumes that the ecommerce service uses an API key to authenticate.
             if has_api_key_permissions:
-                current_enrollment = api.get_enrollment(username, unicode(course_id))
+                current_enrollment = api.get_enrollment(username, text_type(course_id))
                 audit_log(
                     'enrollment_change_requested',
-                    course_id=unicode(course_id),
+                    course_id=text_type(course_id),
                     requested_mode=mode,
                     actual_mode=current_enrollment['mode'] if current_enrollment else None,
                     requested_activation=is_active,
                     actual_activation=current_enrollment['is_active'] if current_enrollment else None,
                     user_id=user.id
                 )
+
+
+@can_disable_rate_limit
+class CourseEnrollmentsApiListView(DeveloperErrorViewMixin, ListAPIView):
+    """
+        **Use Cases**
+
+            Get a list of all course enrollments, optionally filtered by a course ID or list of usernames.
+
+        **Example Requests**
+
+            GET /api/enrollment/v1/enrollments
+
+            GET /api/enrollment/v1/enrollments?course_id={course_id}
+
+            GET /api/enrollment/v1/enrollments?username={username},{username},{username}
+
+            GET /api/enrollment/v1/enrollments?course_id={course_id}&username={username}
+
+        **Query Parameters for GET**
+
+            * course_id: Filters the result to course enrollments for the course corresponding to the
+              given course ID. The value must be URL encoded. Optional.
+
+            * username: List of comma-separated usernames. Filters the result to the course enrollments
+              of the given users. Optional.
+
+            * page_size: Number of results to return per page. Optional.
+
+            * page: Page number to retrieve. Optional.
+
+        **Response Values**
+
+            If the request for information about the course enrollments is successful, an HTTP 200 "OK" response
+            is returned.
+
+            The HTTP 200 response has the following values.
+
+            * results: A list of the course enrollments matching the request.
+
+                * created: Date and time when the course enrollment was created.
+
+                * mode: Mode for the course enrollment.
+
+                * is_active: Whether the course enrollment is active or not.
+
+                * user: Username of the user in the course enrollment.
+
+                * course_id: Course ID of the course in the course enrollment.
+
+            * next: The URL to the next page of results, or null if this is the
+              last page.
+
+            * previous: The URL to the next page of results, or null if this
+              is the first page.
+
+            If the user is not logged in, a 401 error is returned.
+
+            If the user is not global staff, a 403 error is returned.
+
+            If the specified course_id is not valid or any of the specified usernames
+            are not valid, a 400 error is returned.
+
+            If the specified course_id does not correspond to a valid course or if all the specified
+            usernames do not correspond to valid users, an HTTP 200 "OK" response is returned with an
+            empty 'results' field.
+    """
+    authentication_classes = (
+        JwtAuthentication,
+        OAuth2AuthenticationAllowInactiveUser,
+        SessionAuthenticationAllowInactiveUser,
+    )
+    permission_classes = (permissions.IsAdminUser, )
+    throttle_classes = (EnrollmentUserThrottle, )
+    serializer_class = CourseEnrollmentsApiListSerializer
+    pagination_class = CourseEnrollmentsApiListPagination
+
+    def get_queryset(self):
+        """
+        Get all the course enrollments for the given course_id and/or given list of usernames.
+        """
+        form = CourseEnrollmentsApiListForm(self.request.query_params)
+
+        if not form.is_valid():
+            raise ValidationError(form.errors)
+
+        queryset = CourseEnrollment.objects.all()
+        course_id = form.cleaned_data.get('course_id')
+        usernames = form.cleaned_data.get('username')
+
+        if course_id:
+            queryset = queryset.filter(course_id=course_id)
+        if usernames:
+            queryset = queryset.filter(user__username__in=usernames)
+        return queryset

@@ -123,7 +123,6 @@ class RecalculateSubsectionGradeTest(HasCourseWithProblemsMixin, ModuleStoreTest
     """
     Ensures that the recalculate subsection grade task functions as expected when run.
     """
-    shard = 4
     ENABLED_SIGNALS = ['course_published', 'pre_publish']
 
     def setUp(self):
@@ -176,10 +175,10 @@ class RecalculateSubsectionGradeTest(HasCourseWithProblemsMixin, ModuleStoreTest
             self.assertEquals(mock_block_structure_create.call_count, 1)
 
     @ddt.data(
-        (ModuleStoreEnum.Type.mongo, 1, 33, True),
-        (ModuleStoreEnum.Type.mongo, 1, 33, False),
-        (ModuleStoreEnum.Type.split, 3, 33, True),
-        (ModuleStoreEnum.Type.split, 3, 33, False),
+        (ModuleStoreEnum.Type.mongo, 1, 38, True),
+        (ModuleStoreEnum.Type.mongo, 1, 38, False),
+        (ModuleStoreEnum.Type.split, 3, 38, True),
+        (ModuleStoreEnum.Type.split, 3, 38, False),
     )
     @ddt.unpack
     def test_query_counts(self, default_store, num_mongo_calls, num_sql_calls, create_multiple_subsections):
@@ -191,8 +190,8 @@ class RecalculateSubsectionGradeTest(HasCourseWithProblemsMixin, ModuleStoreTest
                     self._apply_recalculate_subsection_grade()
 
     @ddt.data(
-        (ModuleStoreEnum.Type.mongo, 1, 33),
-        (ModuleStoreEnum.Type.split, 3, 33),
+        (ModuleStoreEnum.Type.mongo, 1, 38),
+        (ModuleStoreEnum.Type.split, 3, 38),
     )
     @ddt.unpack
     def test_query_counts_dont_change_with_more_content(self, default_store, num_mongo_calls, num_sql_calls):
@@ -237,8 +236,8 @@ class RecalculateSubsectionGradeTest(HasCourseWithProblemsMixin, ModuleStoreTest
         )
 
     @ddt.data(
-        (ModuleStoreEnum.Type.mongo, 1, 17),
-        (ModuleStoreEnum.Type.split, 3, 17),
+        (ModuleStoreEnum.Type.mongo, 1, 21),
+        (ModuleStoreEnum.Type.split, 3, 21),
     )
     @ddt.unpack
     def test_persistent_grades_not_enabled_on_course(self, default_store, num_mongo_queries, num_sql_queries):
@@ -252,8 +251,8 @@ class RecalculateSubsectionGradeTest(HasCourseWithProblemsMixin, ModuleStoreTest
             self.assertEqual(len(PersistentSubsectionGrade.bulk_read_grades(self.user.id, self.course.id)), 0)
 
     @ddt.data(
-        (ModuleStoreEnum.Type.mongo, 1, 34),
-        (ModuleStoreEnum.Type.split, 3, 34),
+        (ModuleStoreEnum.Type.mongo, 1, 39),
+        (ModuleStoreEnum.Type.split, 3, 39),
     )
     @ddt.unpack
     def test_persistent_grades_enabled_on_course(self, default_store, num_mongo_queries, num_sql_queries):
@@ -420,7 +419,6 @@ class ComputeGradesForCourseTest(HasCourseWithProblemsMixin, ModuleStoreTestCase
     """
     Test compute_grades_for_course_v2 task.
     """
-    shard = 4
 
     ENABLED_SIGNALS = ['course_published', 'pre_publish']
 

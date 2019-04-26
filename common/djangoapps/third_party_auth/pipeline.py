@@ -65,6 +65,7 @@ import urllib
 from collections import OrderedDict
 from logging import getLogger
 from smtplib import SMTPException
+from uuid import uuid4
 
 from django.conf import settings
 from django.contrib.auth.models import User
@@ -76,8 +77,11 @@ import social_django
 from social_core.exceptions import AuthException
 from social_core.pipeline import partial
 from social_core.pipeline.social_auth import associate_by_email
+from social_core.utils import slugify, module_member
 
 from edxmako.shortcuts import render_to_string
+
+from util.json_request import JsonResponse
 from openedx.core.djangoapps.site_configuration import helpers as configuration_helpers
 from openedx.core.djangoapps.user_authn import cookies as user_authn_cookies
 from lms.djangoapps.verify_student.models import SSOVerification
@@ -146,6 +150,8 @@ _AUTH_ENTRY_CHOICES = frozenset([
     AUTH_ENTRY_LOGIN_API,
     AUTH_ENTRY_REGISTER_API,
 ] + AUTH_ENTRY_CUSTOM.keys())
+
+USER_FIELDS = ['username', 'email']
 
 
 logger = getLogger(__name__)
@@ -275,7 +281,7 @@ def _get_enabled_provider(provider_id):
     enabled_provider = provider.Registry.get(provider_id)
 
     if not enabled_provider:
-        raise ValueError('Provider %s not enabled' % provider_id)
+        raise ValueError(u'Provider %s not enabled' % provider_id)
 
     return enabled_provider
 
@@ -317,7 +323,7 @@ def get_complete_url(backend_name):
         ValueError: if no provider is enabled with the given backend_name.
     """
     if not any(provider.Registry.get_enabled_by_backend_name(backend_name)):
-        raise ValueError('Provider with backend %s not enabled' % backend_name)
+        raise ValueError(u'Provider with backend %s not enabled' % backend_name)
 
     return _get_url('social:complete', backend_name)
 
@@ -593,7 +599,7 @@ def ensure_user_information(strategy, auth_entry, backend=None, user=None, socia
             # register anew via SSO. See SOL-1324 in JIRA.
             # However, we will log a warning for this case:
             logger.warning(
-                'User "%s" is using third_party_auth to login but has not yet activated their account. ',
+                u'User "%s" is using third_party_auth to login but has not yet activated their account. ',
                 user.username
             )
 
@@ -626,13 +632,16 @@ def set_logged_in_cookies(backend=None, user=None, strategy=None, auth_entry=Non
 
     """
     if not is_api(auth_entry) and user is not None and user.is_authenticated:
+        if not user.has_usable_password():
+            msg = "Your account is disabled"
+            return JsonResponse(msg, status=403)
         request = strategy.request if strategy else None
         # n.b. for new users, user.is_active may be False at this point; set the cookie anyways.
         if request is not None:
             # Check that the cookie isn't already set.
             # This ensures that we allow the user to continue to the next
             # pipeline step once he/she has the cookie set by this step.
-            has_cookie = user_authn_cookies.is_logged_in_cookie_set(request)
+            has_cookie = user_authn_cookies.are_logged_in_cookies_set(request)
             if not has_cookie:
                 try:
                     redirect_url = get_complete_url(current_partial.backend)
@@ -727,8 +736,8 @@ def user_details_force_sync(auth_entry, strategy, details, user=None, *args, **k
             current_value = getattr(model, field)
             if provider_value is not None and current_value != provider_value:
                 if field in integrity_conflict_fields and User.objects.filter(**{field: provider_value}).exists():
-                    logger.warning('User with ID [%s] tried to synchronize profile data through [%s] '
-                                   'but there was a conflict with an existing [%s]: [%s].',
+                    logger.warning(u'User with ID [%s] tried to synchronize profile data through [%s] '
+                                   u'but there was a conflict with an existing [%s]: [%s].',
                                    user.id, current_provider.name, field, provider_value)
                     continue
                 changed[provider_field] = current_value
@@ -736,8 +745,8 @@ def user_details_force_sync(auth_entry, strategy, details, user=None, *args, **k
 
         if changed:
             logger.info(
-                "User [%s] performed SSO through [%s] who synchronizes profile data, and the "
-                "following fields were changed: %s", user.username, current_provider.name, changed.keys(),
+                u"User [%s] performed SSO through [%s] who synchronizes profile data, and the "
+                u"following fields were changed: %s", user.username, current_provider.name, changed.keys(),
             )
 
             # Save changes to user and user.profile models.
@@ -763,7 +772,7 @@ def user_details_force_sync(auth_entry, strategy, details, user=None, *args, **k
                     email.send()
                 except SMTPException:
                     logger.exception('Error sending IdP learner data sync-initiated email change '
-                                     'notification email for user [%s].', user.username)
+                                     u'notification email for user [%s].', user.username)
 
 
 def set_id_verification_status(auth_entry, strategy, details, user=None, *args, **kwargs):
@@ -790,3 +799,64 @@ def set_id_verification_status(auth_entry, strategy, details, user=None, *args, 
                 identity_provider_type=current_provider.full_class_name,
                 identity_provider_slug=current_provider.slug,
             )
+
+
+def get_username(strategy, details, backend, user=None, *args, **kwargs):
+    """
+    Copy of social_core.pipeline.user.get_username with additional logging and case insensitive username checks.
+    """
+    if 'username' not in backend.setting('USER_FIELDS', USER_FIELDS):
+        return
+    storage = strategy.storage
+
+    if not user:
+        email_as_username = strategy.setting('USERNAME_IS_FULL_EMAIL', False)
+        uuid_length = strategy.setting('UUID_LENGTH', 16)
+        max_length = storage.user.username_max_length()
+        do_slugify = strategy.setting('SLUGIFY_USERNAMES', False)
+        do_clean = strategy.setting('CLEAN_USERNAMES', True)
+
+        if do_clean:
+            override_clean = strategy.setting('CLEAN_USERNAME_FUNCTION')
+            if override_clean:
+                clean_func = module_member(override_clean)
+            else:
+                clean_func = storage.user.clean_username
+        else:
+            clean_func = lambda val: val
+
+        if do_slugify:
+            override_slug = strategy.setting('SLUGIFY_FUNCTION')
+            if override_slug:
+                slug_func = module_member(override_slug)
+            else:
+                slug_func = slugify
+        else:
+            slug_func = lambda val: val
+
+        if email_as_username and details.get('email'):
+            username = details['email']
+        elif details.get('username'):
+            username = details['username']
+        else:
+            username = uuid4().hex
+
+        short_username = (username[:max_length - uuid_length]
+                          if max_length is not None
+                          else username)
+        final_username = slug_func(clean_func(username[:max_length]))
+
+        # Generate a unique username for current user using username
+        # as base but adding a unique hash at the end. Original
+        # username is cut to avoid any field max_length.
+        # The final_username may be empty and will skip the loop.
+        # We are using our own version of user_exists to avoid possible case sensitivity issues.
+        while not final_username or user_exists({'username': final_username}):
+            # These log statements are here for debugging purposes and should be removed when ENT-1500 is resolved.
+            logger.info(u'Username %s is either empty or already in use, generating a new username!', final_username)
+            username = short_username + uuid4().hex[:uuid_length]
+            final_username = slug_func(clean_func(username[:max_length]))
+            logger.info(u'Generated username %s.', final_username)
+    else:
+        final_username = storage.user.get_username(user)
+    return {'username': final_username}

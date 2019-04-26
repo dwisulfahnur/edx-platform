@@ -35,6 +35,13 @@ import os
 from corsheaders.defaults import default_headers as corsheaders_default_headers
 from path import Path as path
 from django.utils.translation import ugettext_lazy as _
+from enterprise.constants import (
+    ENTERPRISE_ADMIN_ROLE,
+    ENTERPRISE_OPERATOR_ROLE,
+    ENTERPRISE_DASHBOARD_ADMIN_ROLE,
+    ENTERPRISE_CATALOG_ADMIN_ROLE,
+    ENTERPRISE_ENROLLMENT_API_ADMIN_ROLE
+)
 
 from openedx.core.constants import COURSE_KEY_REGEX, COURSE_KEY_PATTERN, COURSE_ID_PATTERN
 from openedx.core.djangoapps.theming.helpers_dirs import (
@@ -66,6 +73,10 @@ LMS_ENROLLMENT_API_PATH = "/api/enrollment/v1/"
 # This setting is used when a site does not define its own choices via site configuration
 MANUAL_ENROLLMENT_ROLE_CHOICES = ['Learner', 'Support', 'Partner']
 
+# List of logout URIs for each IDA that the learner should be logged out of when they logout of the LMS. Only applies to
+# IDA for which the social auth flow uses DOT (Django OAuth Toolkit).
+IDA_LOGOUT_URI_LIST = []
+
 # Features
 FEATURES = {
     'DISPLAY_DEBUG_INFO_TO_STAFF': True,
@@ -81,7 +92,19 @@ FEATURES = {
     # in sync with the corresponding ones in cms/envs/common.py
     'ENABLE_DISCUSSION_SERVICE': True,
     'ENABLE_TEXTBOOK': True,
-    'ENABLE_STUDENT_NOTES': True,  # enables the student notes API and UI.
+
+    # .. toggle_name: ENABLE_STUDENT_NOTES
+    # .. toggle_type: feature_flag
+    # .. toggle_default: True
+    # .. toggle_description: Enables the Student Notes API and UI.
+    # .. toggle_category: ????
+    # .. toggle_use_cases: open_edx
+    # .. toggle_creation_date: 2014-11-13
+    # .. toggle_expiration_date: None
+    # .. toggle_warnings: None
+    # .. toggle_tickets: TNL-659
+    # .. toggle_status: supported
+    'ENABLE_STUDENT_NOTES': True,
 
     # discussion home panel, which includes a subscription on/off setting for discussion digest emails.
     # this should remain off in production until digest notifications are online.
@@ -100,22 +123,20 @@ FEATURES = {
 
     'ENABLE_MASQUERADE': True,  # allow course staff to change to student view of courseware
 
+    # .. toggle_name: ENABLE_SYSADMIN_DASHBOARD
+    # .. toggle_type: feature_flag
+    # .. toggle_default: False
+    # .. toggle_description: enables dashboard at /syadmin/ for django staff, for seeing overview of system status, for deleting and loading courses, for seeing log of git imports of courseware.
+    # .. toggle_category: admin
+    # .. toggle_use_cases: open_edx
+    # .. toggle_creation_date: 2013-12-12
+    # .. toggle_expiration_date: None
+    # .. toggle_warnings: some views are not performant when there are more than 100 courses
+    # .. toggle_tickets: None
+    # .. toggle_status: unsupported
     'ENABLE_SYSADMIN_DASHBOARD': False,  # sysadmin dashboard, to see what courses are loaded, to delete & load courses
 
     'DISABLE_LOGIN_BUTTON': False,  # used in systems where login is automatic, eg MIT SSL
-
-    # extrernal access methods
-    'AUTH_USE_OPENID': False,
-    'AUTH_USE_CERTIFICATES': False,
-    'AUTH_USE_OPENID_PROVIDER': False,
-    # Even though external_auth is in common, shib assumes the LMS views / urls, so it should only be enabled
-    # in LMS
-    'AUTH_USE_SHIB': False,
-    'AUTH_USE_CAS': False,
-
-    # This flag disables the requirement of having to agree to the TOS for users registering
-    # with Shib.  Feature was requested by Stanford's office of general counsel
-    'SHIB_DISABLE_TOS': False,
 
     # Toggles OAuth2 authentication provider
     'ENABLE_OAUTH2_PROVIDER': False,
@@ -132,9 +153,6 @@ FEATURES = {
 
     # Set to hide the courses list on the Learner Dashboard if they are not enrolled in any courses yet.
     'HIDE_DASHBOARD_COURSES_UNTIL_ACTIVATED': False,
-
-    # Enables ability to restrict enrollment in specific courses by the user account login method
-    'RESTRICT_ENROLL_BY_REG_METHOD': False,
 
     # enable analytics server.
     # WARNING: THIS SHOULD ALWAYS BE SET TO FALSE UNDER NORMAL
@@ -237,9 +255,6 @@ FEATURES = {
 
     # Prevent concurrent logins per user
     'PREVENT_CONCURRENT_LOGINS': True,
-
-    # Turn on Advanced Security by default
-    'ADVANCED_SECURITY': True,
 
     # When a logged in user goes to the homepage ('/') should the user be
     # redirected to the dashboard - this is default Open edX behavior. Set to
@@ -449,9 +464,7 @@ node_paths = [
 NODE_PATH = ':'.join(node_paths)
 
 # For geolocation ip database
-GEOIP_PATH = REPO_ROOT / "common/static/data/geoip/GeoIP.dat"
-GEOIPV6_PATH = REPO_ROOT / "common/static/data/geoip/GeoIPv6.dat"
-
+GEOIP_PATH = REPO_ROOT / "common/static/data/geoip/GeoLite2-Country.mmdb"
 # Where to look for a status message
 STATUS_MESSAGE_PATH = ENV_ROOT / "status_message.json"
 
@@ -494,6 +507,7 @@ OAUTH_EXPIRE_PUBLIC_CLIENT_DAYS = 30
 # Scope description strings are presented to the user
 # on the application authorization page. See
 # lms/templates/oauth2_provider/authorize.html for details.
+# Non-default scopes should be added directly to OAUTH2_PROVIDER['SCOPES'] below.
 OAUTH2_DEFAULT_SCOPES = {
     'read': _('Read access'),
     'write': _('Write access'),
@@ -507,6 +521,7 @@ OAUTH2_PROVIDER = {
     'REFRESH_TOKEN_EXPIRE_SECONDS': 7776000,
     'SCOPES_BACKEND_CLASS': 'openedx.core.djangoapps.oauth_dispatch.scopes.ApplicationModelScopes',
     'SCOPES': dict(OAUTH2_DEFAULT_SCOPES, **{
+        'user_id': _('Retrieve your user identifier'),
         'grades:read': _('Retrieve your grades for your enrolled courses'),
         'certificates:read': _('Retrieve your course certificates'),
     }),
@@ -654,8 +669,10 @@ derived_collection_entry('DEFAULT_TEMPLATE_ENGINE', 'DIRS')
 ###############################################################################################
 
 AUTHENTICATION_BACKENDS = [
+    'rules.permissions.ObjectPermissionBackend',
     'openedx.core.djangoapps.oauth_dispatch.dot_overrides.backends.EdxRateLimitedAllowAllUsersModelBackend'
 ]
+
 STUDENT_FILEUPLOAD_MAX_SIZE = 4 * 1000 * 1000  # 4 MB
 MAX_FILEUPLOADS_PER_INPUT = 20
 
@@ -965,6 +982,7 @@ MEDIA_ROOT = '/edx/var/edxapp/media/'
 MEDIA_URL = '/media/'
 
 # Locale/Internationalization
+CELERY_TIMEZONE = 'UTC'
 TIME_ZONE = 'America/New_York'  # http://en.wikipedia.org/wiki/List_of_tz_zones_by_name
 LANGUAGE_CODE = 'en'  # http://www.i18nguy.com/unicode/language-identifiers.html
 # these languages display right to left
@@ -1218,6 +1236,9 @@ MIDDLEWARE_CLASSES = [
     'edx_django_utils.cache.middleware.RequestCacheMiddleware',
     'edx_django_utils.monitoring.middleware.MonitoringCustomMetricsMiddleware',
 
+    # Cookie monitoring
+    'openedx.core.lib.request_utils.CookieMetricsMiddleware',
+
     'mobile_api.middleware.AppVersionUpgrade',
     'openedx.core.djangoapps.header_control.middleware.HeaderControlMiddleware',
     'microsite_configuration.middleware.MicrositeMiddleware',
@@ -1348,28 +1369,6 @@ courseware_js = [
     'js/modules/tab.js',
 ]
 
-proctoring_js = (
-    [
-        'proctoring/js/models/proctored_exam_allowance_model.js',
-        'proctoring/js/models/proctored_exam_attempt_model.js',
-        'proctoring/js/models/proctored_exam_model.js'
-    ] +
-    [
-        'proctoring/js/collections/proctored_exam_allowance_collection.js',
-        'proctoring/js/collections/proctored_exam_attempt_collection.js',
-        'proctoring/js/collections/proctored_exam_collection.js'
-    ] +
-    [
-        'proctoring/js/views/Backbone.ModalDialog.js',
-        'proctoring/js/views/proctored_exam_add_allowance_view.js',
-        'proctoring/js/views/proctored_exam_allowance_view.js',
-        'proctoring/js/views/proctored_exam_attempt_view.js',
-        'proctoring/js/views/proctored_exam_view.js'
-    ] +
-    [
-        'proctoring/js/proctored_app.js'
-    ]
-)
 
 # Before a student accesses courseware, we do not
 # need many of the JS dependencies.  This includes
@@ -1696,10 +1695,6 @@ PIPELINE_JS = {
         ),
         'output_filename': 'js/lms-application.js',
     },
-    'proctoring': {
-        'source_filenames': proctoring_js,
-        'output_filename': 'js/lms-proctoring.js',
-    },
     'courseware': {
         'source_filenames': courseware_js,
         'output_filename': 'js/lms-courseware.js',
@@ -1844,6 +1839,10 @@ WEBPACK_LOADER = {
     'DEFAULT': {
         'BUNDLE_DIR_NAME': 'bundles/',
         'STATS_FILE': os.path.join(STATIC_ROOT, 'webpack-stats.json')
+    },
+    'WORKERS': {
+        'BUNDLE_DIR_NAME': 'bundles/',
+        'STATS_FILE': os.path.join(STATIC_ROOT, 'webpack-worker-stats.json')
     }
 }
 WEBPACK_CONFIG_PATH = 'webpack.prod.config.js'
@@ -2085,10 +2084,6 @@ INSTALLED_APPS = [
     # Student support tools
     'support',
 
-    # External auth (OpenID, shib)
-    'openedx.core.djangoapps.external_auth',
-    'django_openid_auth',
-
     # django-oauth2-provider (deprecated)
     'provider',
     'provider.oauth2',
@@ -2138,9 +2133,6 @@ INSTALLED_APPS = [
 
     # Splash screen
     'splash',
-
-    # Monitoring
-    'openedx.core.djangoapps.datadog.apps.DatadogConfig',
 
     # User API
     'rest_framework',
@@ -2265,6 +2257,9 @@ INSTALLED_APPS = [
 
     # additional release utilities to ease automation
     'release_util',
+
+    # rule-based authorization
+    'rules.apps.AutodiscoverRulesConfig',
 
     # Customized celery tasks, including persisting failed tasks so they can
     # be retried
@@ -2403,28 +2398,28 @@ SOCIAL_MEDIA_FOOTER_DISPLAY = {
         # translate this the way that Facebook advertises in your language.
         "title": _("Facebook"),
         "icon": "fa-facebook-square",
-        "action": _("Like {platform_name} on Facebook")
+        "action": _(u"Like {platform_name} on Facebook")
     },
     "twitter": {
         # Translators: This is the website name of www.twitter.com.  Please
         # translate this the way that Twitter advertises in your language.
         "title": _("Twitter"),
         "icon": "fa-twitter-square",
-        "action": _("Follow {platform_name} on Twitter")
+        "action": _(u"Follow {platform_name} on Twitter")
     },
     "linkedin": {
         # Translators: This is the website name of www.linkedin.com.  Please
         # translate this the way that LinkedIn advertises in your language.
         "title": _("LinkedIn"),
         "icon": "fa-linkedin-square",
-        "action": _("Follow {platform_name} on LinkedIn")
+        "action": _(u"Follow {platform_name} on LinkedIn")
     },
     "google_plus": {
         # Translators: This is the website name of plus.google.com.  Please
         # translate this the way that Google+ advertises in your language.
         "title": _("Google+"),
         "icon": "fa-google-plus-square",
-        "action": _("Follow {platform_name} on Google+")
+        "action": _(u"Follow {platform_name} on Google+")
     },
     "tumblr": {
         # Translators: This is the website name of www.tumblr.com.  Please
@@ -2443,7 +2438,7 @@ SOCIAL_MEDIA_FOOTER_DISPLAY = {
         # translate this the way that Reddit advertises in your language.
         "title": _("Reddit"),
         "icon": "fa-reddit-square",
-        "action": _("Subscribe to the {platform_name} subreddit"),
+        "action": _(u"Subscribe to the {platform_name} subreddit"),
     },
     "vk": {
         # Translators: This is the website name of https://vk.com.  Please
@@ -2462,7 +2457,7 @@ SOCIAL_MEDIA_FOOTER_DISPLAY = {
         # translate this the way that YouTube advertises in your language.
         "title": _("Youtube"),
         "icon": "fa-youtube-square",
-        "action": _("Subscribe to the {platform_name} YouTube channel")
+        "action": _(u"Subscribe to the {platform_name} YouTube channel")
     }
 }
 
@@ -2491,19 +2486,6 @@ if FEATURES.get('CLASS_DASHBOARD'):
 ENABLE_CREDIT_ELIGIBILITY = True
 FEATURES['ENABLE_CREDIT_ELIGIBILITY'] = ENABLE_CREDIT_ELIGIBILITY
 
-######################## CAS authentication ###########################
-
-if FEATURES.get('AUTH_USE_CAS'):
-    CAS_SERVER_URL = 'https://provide_your_cas_url_here'
-    AUTHENTICATION_BACKENDS = [
-        'django.contrib.auth.backends.ModelBackend',
-        'django_cas.backends.CASBackend',
-    ]
-
-    INSTALLED_APPS.append('django_cas')
-
-    MIDDLEWARE_CLASSES.append('django_cas.middleware.CASMiddleware')
-
 ############# Cross-domain requests #################
 
 if FEATURES.get('ENABLE_CORS_HEADERS'):
@@ -2519,7 +2501,7 @@ if FEATURES.get('ENABLE_CORS_HEADERS'):
 # to simulate cross-domain requests.
 XDOMAIN_PROXY_CACHE_TIMEOUT = 60 * 15
 
-LOGIN_REDIRECT_WHITELIST = []
+LOGIN_REDIRECT_WHITELIST = [CMS_BASE]
 
 ###################### Registration ##################################
 
@@ -2884,9 +2866,6 @@ OPTIONAL_APPS = [
     # edxval
     ('edxval', 'openedx.core.djangoapps.content.course_overviews.apps.CourseOverviewsConfig'),
 
-    # edX Proctoring
-    ('edx_proctoring', None),
-
     # Organizations App (http://github.com/edx/edx-organizations)
     ('organizations', None),
 
@@ -2918,10 +2897,6 @@ for app_name, insert_before in OPTIONAL_APPS:
         INSTALLED_APPS.insert(INSTALLED_APPS.index(insert_before), app_name)
     except (IndexError, ValueError):
         INSTALLED_APPS.append(app_name)
-
-### ADVANCED_SECURITY_CONFIG
-# Empty by default
-ADVANCED_SECURITY_CONFIG = {}
 
 ### External auth usage -- prefixes for ENROLLMENT_DOMAIN
 SHIBBOLETH_DOMAIN_PREFIX = 'shib:'
@@ -2991,51 +2966,52 @@ ACCOUNT_VISIBILITY_CONFIGURATION = {
     # The value is one of: 'all_users', 'private'
     "default_visibility": "all_users",
 
-    # The list of all fields that can be shared with other users
-    "shareable_fields": [
-        'username',
-        'profile_image',
-        'country',
-        'time_zone',
-        'date_joined',
-        'language_proficiencies',
-        'bio',
-        'social_links',
-        'account_privacy',
-        # Not an actual field, but used to signal whether badges should be public.
-        'accomplishments_shared',
-    ],
-
     # The list of account fields that are always public
     "public_fields": [
-        'username',
-        'profile_image',
         'account_privacy',
+        'profile_image',
+        'username',
     ],
+}
 
-    # The list of account fields that are visible only to staff and users viewing their own profiles
-    "admin_fields": [
-        "username",
-        "email",
-        "is_active",
-        "bio",
-        "country",
-        "date_joined",
-        "profile_image",
-        "language_proficiencies",
-        "social_links",
+# The list of all fields that are shared with other users using the bulk 'all_users' privacy setting
+ACCOUNT_VISIBILITY_CONFIGURATION["bulk_shareable_fields"] = (
+    ACCOUNT_VISIBILITY_CONFIGURATION["public_fields"] + [
+        'bio',
+        'course_certificates',
+        'country',
+        'date_joined',
+        'language_proficiencies',
+        "level_of_education",
+        'social_links',
+        'time_zone',
+
+        # Not an actual field, but used to signal whether badges should be public.
+        'accomplishments_shared',
+    ]
+)
+
+# The list of all fields that can be shared selectively with other users using the 'custom' privacy setting
+ACCOUNT_VISIBILITY_CONFIGURATION["custom_shareable_fields"] = (
+    ACCOUNT_VISIBILITY_CONFIGURATION["bulk_shareable_fields"] + [
         "name",
+    ]
+)
+
+# The list of account fields that are visible only to staff and users viewing their own profiles
+ACCOUNT_VISIBILITY_CONFIGURATION["admin_fields"] = (
+    ACCOUNT_VISIBILITY_CONFIGURATION["custom_shareable_fields"] + [
+        "email",
+        "extended_profile",
         "gender",
         "goals",
-        "year_of_birth",
-        "level_of_education",
+        "is_active",
         "mailing_address",
         "requires_parental_consent",
-        "account_privacy",
-        "accomplishments_shared",
-        "extended_profile",
+        "secondary_email",
+        "year_of_birth",
     ]
-}
+)
 
 # The current list of social platforms to be shown to the user.
 #
@@ -3190,7 +3166,7 @@ JWT_AUTH = {
     'JWT_LOGIN_CLIENT_ID': 'login-service-client-id',
     'JWT_LOGIN_SERVICE_USERNAME': 'login_service_user',
 
-    'JWT_SUPPORTED_VERSION': '1.1.0',
+    'JWT_SUPPORTED_VERSION': '1.2.0',
 
     'JWT_ALGORITHM': 'HS256',
     'JWT_SECRET_KEY': SECRET_KEY,
@@ -3220,14 +3196,6 @@ MICROSITE_DATABASE_TEMPLATE_CACHE_TTL = 5 * 60
 ################################ Settings for rss_proxy ################################
 
 RSS_PROXY_CACHE_TIMEOUT = 3600  # The length of time we cache RSS retrieved from remote URLs in seconds
-
-#### PROCTORING CONFIGURATION DEFAULTS
-
-PROCTORING_BACKEND_PROVIDER = {
-    'class': 'edx_proctoring.backends.null.NullBackendProvider',
-    'options': {},
-}
-PROCTORING_SETTINGS = {}
 
 #### Custom Courses for EDX (CCX) configuration
 
@@ -3277,6 +3245,9 @@ AUDIT_CERT_CUTOFF_DATE = None
 
 CREDENTIALS_SERVICE_USERNAME = 'credentials_service_user'
 CREDENTIALS_GENERATION_ROUTING_KEY = DEFAULT_PRIORITY_QUEUE
+
+# Queue to use for award program certificates
+PROGRAM_CERTIFICATES_ROUTING_KEY = DEFAULT_PRIORITY_QUEUE
 
 # Settings for Comprehensive Theming app
 
@@ -3342,7 +3313,7 @@ ENTERPRISE_CUSTOMER_CATALOG_DEFAULT_CONTENT_FILTER = {}
 ############## ENTERPRISE SERVICE API CLIENT CONFIGURATION ######################
 # The LMS communicates with the Enterprise service via the EdxRestApiClient class
 # These default settings are utilized by the LMS when interacting with the service,
-# and are overridden by the configuration parameter accessors defined in aws.py
+# and are overridden by the configuration parameter accessors defined in production.py
 
 ENTERPRISE_API_URL = LMS_INTERNAL_ROOT_URL + '/enterprise/api/v1/'
 ENTERPRISE_CONSENT_API_URL = LMS_INTERNAL_ROOT_URL + '/consent/api/v1/'
@@ -3357,11 +3328,11 @@ ENTERPRISE_CUSTOMER_LOGO_IMAGE_SIZE = 512   # Enterprise logo image size limit i
 
 ENTERPRISE_PLATFORM_WELCOME_TEMPLATE = _(u'Welcome to {platform_name}.')
 ENTERPRISE_SPECIFIC_BRANDED_WELCOME_TEMPLATE = _(
-    'You have left the {start_bold}{enterprise_name}{end_bold} website and are now on the {platform_name} site. '
-    '{enterprise_name} has partnered with {platform_name} to offer you high-quality, always available learning '
-    'programs to help you advance your knowledge and career. '
-    '{line_break}Please note that {platform_name} has a different {privacy_policy_link_start}Privacy Policy'
-    '{privacy_policy_link_end} from {enterprise_name}.'
+    u'You have left the {start_bold}{enterprise_name}{end_bold} website and are now on the {platform_name} site. '
+    u'{enterprise_name} has partnered with {platform_name} to offer you high-quality, always available learning '
+    u'programs to help you advance your knowledge and career. '
+    u'{line_break}Please note that {platform_name} has a different {privacy_policy_link_start}Privacy Policy'
+    u'{privacy_policy_link_end} from {enterprise_name}.'
 )
 ENTERPRISE_TAGLINE = ''
 ENTERPRISE_EXCLUDED_REGISTRATION_FIELDS = {
@@ -3380,44 +3351,64 @@ ENTERPRISE_READONLY_ACCOUNT_FIELDS = [
 ]
 ENTERPRISE_CUSTOMER_COOKIE_NAME = 'enterprise_customer_uuid'
 BASE_COOKIE_DOMAIN = 'localhost'
+SYSTEM_TO_FEATURE_ROLE_MAPPING = {
+    ENTERPRISE_ADMIN_ROLE: [ENTERPRISE_DASHBOARD_ADMIN_ROLE],
+    ENTERPRISE_OPERATOR_ROLE: [
+        ENTERPRISE_DASHBOARD_ADMIN_ROLE,
+        ENTERPRISE_CATALOG_ADMIN_ROLE,
+        ENTERPRISE_ENROLLMENT_API_ADMIN_ROLE
+    ],
+}
+
+DATA_CONSENT_SHARE_CACHE_TIMEOUT = None  # Never expire
 
 ############## Settings for Course Enrollment Modes ######################
+# The min_price key refers to the minimum price allowed for an instance
+# of a particular type of course enrollment mode. This is not to be confused
+# with the min_price field of the CourseMode model, which refers to the actual
+# price of the CourseMode.
 COURSE_ENROLLMENT_MODES = {
     "audit": {
         "id": 1,
         "slug": "audit",
         "display_name": _("Audit"),
-        "min_price": 0
+        "min_price": 0,
     },
     "verified": {
         "id": 2,
         "slug": "verified",
         "display_name": _("Verified"),
-        "min_price": 0
+        "min_price": 1,
     },
     "professional": {
         "id": 3,
         "slug": "professional",
         "display_name": _("Professional"),
-        "min_price": 0
+        "min_price": 1,
     },
     "no-id-professional": {
         "id": 4,
         "slug": "no-id-professional",
         "display_name": _("No-Id-Professional"),
-        "min_price": 0
+        "min_price": 0,
     },
     "credit": {
         "id": 5,
         "slug": "credit",
         "display_name": _("Credit"),
-        "min_price": 0
+        "min_price": 0,
     },
     "honor": {
         "id": 6,
         "slug": "honor",
         "display_name": _("Honor"),
-        "min_price": 0
+        "min_price": 0,
+    },
+    "masters": {
+        "id": 7,
+        "slug": "masters",
+        "display_name": _("Master's"),
+        "min_price": 0,
     },
 }
 
@@ -3434,7 +3425,7 @@ COURSES_API_CACHE_TIMEOUT = 3600  # Value is in seconds
 COURSEGRAPH_JOB_QUEUE = DEFAULT_PRIORITY_QUEUE
 
 
-# Initialize to 'unknown', but read from JSON in aws.py
+# Initialize to 'unknown', but read from JSON in production.py
 EDX_PLATFORM_REVISION = 'unknown'
 
 ############## Settings for Completion API #########################
@@ -3488,10 +3479,21 @@ RETIREMENT_STATES = [
     'COMPLETE',
 ]
 
-############## Settings for Writable Gradebook  #########################
+USERNAME_REPLACEMENT_WORKER = "REPLACE WITH VALID USERNAME"
+
+############## Settings for Microfrontends  #########################
 # If running a Gradebook container locally,
 # modify lms/envs/private.py to give it a non-null value
 WRITABLE_GRADEBOOK_URL = None
+
+# TODO (DEPR-17)
+# This URL value is needed to redirect the old profile page to a new
+# micro-frontend based implementation. Once the old implementation is
+# completely removed and this redirect is no longer needed, we can remove this.
+PROFILE_MICROFRONTEND_URL = "http://some.profile.spa/u/"
+
+# URL configuration for new microfrontends.
+ORDER_HISTORY_MICROFRONTEND_URL = "http://some.order_history.spa/"
 
 ############### Settings for django-fernet-fields ##################
 FERNET_KEYS = [
@@ -3501,6 +3503,9 @@ FERNET_KEYS = [
 ############### Settings for user-state-client ##################
 # Maximum number of rows to fetch in XBlockUserStateClient calls. Adjust for performance
 USER_STATE_BATCH_SIZE = 5000
+
+############### Settings for edx-rbac  ###############
+SYSTEM_WIDE_ROLE_CLASSES = []
 
 ############## Plugin Django Apps #########################
 

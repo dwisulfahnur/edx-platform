@@ -43,16 +43,6 @@ def index(request):
                 settings.FEATURES.get('ALWAYS_REDIRECT_HOMEPAGE_TO_DASHBOARD_FOR_AUTHENTICATED_USER', True)):
             return redirect(reverse('dashboard'))
 
-    if settings.FEATURES.get('AUTH_USE_CERTIFICATES'):
-        from openedx.core.djangoapps.external_auth.views import ssl_login
-        # Set next URL to dashboard if it isn't set to avoid
-        # caching a redirect to / that causes a redirect loop on logout
-        if not request.GET.get('next'):
-            req_new = request.GET.copy()
-            req_new['next'] = reverse('dashboard')
-            request.GET = req_new
-        return ssl_login(request)
-
     enable_mktg_site = configuration_helpers.get_value(
         'ENABLE_MKTG_SITE',
         settings.FEATURES.get('ENABLE_MKTG_SITE', False)
@@ -123,7 +113,7 @@ def _footer_css_urls(request, package_name):
     ]
 
 
-def _render_footer_html(request, show_openedx_logo, include_dependencies, include_language_selector):
+def _render_footer_html(request, show_openedx_logo, include_dependencies, include_language_selector, language):
     """Render the footer as HTML.
 
     Arguments:
@@ -143,7 +133,8 @@ def _render_footer_html(request, show_openedx_logo, include_dependencies, includ
         'footer_css_urls': _footer_css_urls(request, css_name),
         'bidi': bidi,
         'include_dependencies': include_dependencies,
-        'include_language_selector': include_language_selector
+        'include_language_selector': include_language_selector,
+        'language': language
     }
 
     return render_to_response("footer.html", context)
@@ -288,7 +279,7 @@ def footer(request):
         if content is None:
             with translation.override(language):
                 content = _render_footer_html(
-                    request, show_openedx_logo, include_dependencies, include_language_selector
+                    request, show_openedx_logo, include_dependencies, include_language_selector, language
                 )
                 cache.set(cache_key, content, settings.FOOTER_CACHE_TIMEOUT)
         return HttpResponse(content, status=200, content_type="text/html; charset=utf-8")

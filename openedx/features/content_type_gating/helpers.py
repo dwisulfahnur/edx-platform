@@ -1,39 +1,57 @@
 """
 Helper functions used by both content_type_gating and course_duration_limits.
 """
+import logging
 
-from django_comment_common.models import (
-    FORUM_ROLE_ADMINISTRATOR,
-    FORUM_ROLE_MODERATOR,
-    FORUM_ROLE_GROUP_MODERATOR,
-    FORUM_ROLE_COMMUNITY_TA,
-    Role
-)
-from student.roles import (
-    CourseBetaTesterRole,
-    CourseInstructorRole,
-    CourseStaffRole,
-    OrgStaffRole,
-    OrgInstructorRole,
-    GlobalStaff
-)
+from xmodule.partitions.partitions import Group
+from course_modes.models import CourseMode
+
+# Studio generates partition IDs starting at 100. There is already a manually generated
+# partition for Enrollment Track that uses ID 50, so we'll use 51.
+CONTENT_GATING_PARTITION_ID = 51
+
+CONTENT_TYPE_GATE_GROUP_IDS = {
+    'limited_access': 1,
+    'full_access': 2,
+}
+LIMITED_ACCESS = Group(CONTENT_TYPE_GATE_GROUP_IDS['limited_access'], 'Limited-access Users')
+FULL_ACCESS = Group(CONTENT_TYPE_GATE_GROUP_IDS['full_access'], 'Full-access Users')
+LOG = logging.getLogger(__name__)
 
 
-def has_staff_roles(user, course_key):
+def correct_modes_for_fbe(course_key, enrollment=None, user=None):
     """
-    Disable feature based enrollments for the enrollment if a user has any of the following roles
-    Staff, Instructor, Beta Tester, Forum Community TA, Forum Group Moderator, Forum Moderator, Forum Administrator
+    If CONTENT_TYPE_GATING is enabled use the following logic to determine whether
+    enabled_for_enrollment should be false
     """
-    forum_roles = [FORUM_ROLE_COMMUNITY_TA, FORUM_ROLE_GROUP_MODERATOR,
-                   FORUM_ROLE_MODERATOR, FORUM_ROLE_ADMINISTRATOR]
-    is_staff = CourseStaffRole(course_key).has_user(user)
-    is_instructor = CourseInstructorRole(course_key).has_user(user)
-    is_beta_tester = CourseBetaTesterRole(course_key).has_user(user)
-    is_org_staff = OrgStaffRole(course_key.org).has_user(user)
-    is_org_instructor = OrgInstructorRole(course_key.org).has_user(user)
-    is_global_staff = GlobalStaff().has_user(user)
-    has_forum_role = Role.user_has_role_for_course(user, course_key, forum_roles)
-    if any([is_staff, is_instructor, is_beta_tester, is_org_staff,
-            is_org_instructor, is_global_staff, has_forum_role]):
+    if course_key is None:
         return True
-    return False
+
+    modes = CourseMode.modes_for_course(course_key, include_expired=True, only_selectable=False)
+    modes_dict = {mode.slug: mode for mode in modes}
+
+    # If there is no audit mode or no verified mode, FBE will not be enabled
+    if (CourseMode.AUDIT not in modes_dict) or (CourseMode.VERIFIED not in modes_dict):
+        return False
+
+    if enrollment and user:
+        mode_slug = enrollment.mode
+        if enrollment.is_active:
+            course_mode = CourseMode.mode_for_course(
+                course_key,
+                mode_slug,
+                modes=modes,
+            )
+            if course_mode is None:
+                LOG.error(
+                    u"User %s is in an unknown CourseMode '%s'"
+                    u" for course %s. Granting full access to content for this user",
+                    user.username,
+                    mode_slug,
+                    course_key,
+                )
+                return False
+
+            if mode_slug != CourseMode.AUDIT:
+                return False
+    return True

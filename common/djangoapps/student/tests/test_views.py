@@ -175,7 +175,8 @@ class StudentDashboardTests(SharedModuleStoreTestCase, MilestonesTestCaseMixin, 
     MOCK_SETTINGS = {
         'FEATURES': {
             'DISABLE_START_DATES': False,
-            'ENABLE_MKTG_SITE': True
+            'ENABLE_MKTG_SITE': True,
+            'DISABLE_SET_JWT_COOKIES_FOR_TESTS': True,
         },
         'SOCIAL_SHARING_SETTINGS': {
             'CUSTOM_COURSE_URLS': True,
@@ -186,6 +187,7 @@ class StudentDashboardTests(SharedModuleStoreTestCase, MilestonesTestCaseMixin, 
     MOCK_SETTINGS_HIDE_COURSES = {
         'FEATURES': {
             'HIDE_DASHBOARD_COURSES_UNTIL_ACTIVATED': True,
+            'DISABLE_SET_JWT_COOKIES_FOR_TESTS': True,
         }
     }
 
@@ -739,7 +741,7 @@ class StudentDashboardTests(SharedModuleStoreTestCase, MilestonesTestCaseMixin, 
             user=self.user,
             course_id=course.id
         )
-        schedule = ScheduleFactory(start=self.THREE_YEARS_AGO, enrollment=enrollment)
+        schedule = ScheduleFactory(start=self.THREE_YEARS_AGO + timedelta(days=1), enrollment=enrollment)
 
         response = self.client.get(reverse('dashboard'))
         dashboard_html = self._remove_whitespace_from_html_string(response.content)

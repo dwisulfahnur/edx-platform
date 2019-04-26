@@ -29,7 +29,7 @@ from lms.djangoapps.courseware.tests.factories import (
 )
 from openedx.core.djangoapps.content.course_overviews.models import CourseOverview
 from openedx.core.djangoapps.schedules.tests.factories import ScheduleFactory
-from openedx.features.content_type_gating.partitions import CONTENT_GATING_PARTITION_ID, CONTENT_TYPE_GATE_GROUP_IDS
+from openedx.features.content_type_gating.helpers import CONTENT_GATING_PARTITION_ID, CONTENT_TYPE_GATE_GROUP_IDS
 from openedx.features.course_duration_limits.access import get_user_course_expiration_date, MIN_DURATION, MAX_DURATION
 from openedx.features.course_duration_limits.config import EXPERIMENT_ID, EXPERIMENT_DATA_HOLDBACK_KEY
 from openedx.features.course_experience.tests.views.helpers import add_course_mode
@@ -63,7 +63,7 @@ class CourseExpirationTestCase(ModuleStoreTestCase):
     def test_enrollment_mode(self):
         """Tests that verified enrollments do not have an expiration"""
         CourseEnrollment.enroll(self.user, self.course.id, CourseMode.VERIFIED)
-        result = get_user_course_expiration_date(self.user, self.course)
+        result = get_user_course_expiration_date(self.user, CourseOverview.get_from_id(self.course.id))
         self.assertEqual(result, None)
 
     @mock.patch("openedx.features.course_duration_limits.access.get_course_run_details")
@@ -94,7 +94,10 @@ class CourseExpirationTestCase(ModuleStoreTestCase):
             self.course.self_paced = True
         mock_get_course_run_details.return_value = {'weeks_to_complete': weeks_to_complete}
         enrollment = CourseEnrollment.enroll(self.user, self.course.id, CourseMode.AUDIT)
-        result = get_user_course_expiration_date(self.user, self.course)
+        result = get_user_course_expiration_date(
+            self.user,
+            CourseOverview.get_from_id(self.course.id),
+        )
         self.assertEqual(result, enrollment.created + access_duration)
 
     @mock.patch("openedx.features.course_duration_limits.access.get_course_run_details")
@@ -109,11 +112,17 @@ class CourseExpirationTestCase(ModuleStoreTestCase):
         start_date = now() - timedelta(weeks=10)
         past_course = CourseFactory(start=start_date)
         enrollment = CourseEnrollment.enroll(self.user, past_course.id, CourseMode.AUDIT)
-        result = get_user_course_expiration_date(self.user, past_course)
+        result = get_user_course_expiration_date(
+            self.user,
+            CourseOverview.get_from_id(past_course.id),
+        )
         self.assertEqual(result, None)
 
         add_course_mode(past_course, upgrade_deadline_expired=False)
-        result = get_user_course_expiration_date(self.user, past_course)
+        result = get_user_course_expiration_date(
+            self.user,
+            CourseOverview.get_from_id(past_course.id),
+        )
         content_availability_date = enrollment.created
         self.assertEqual(result, content_availability_date + access_duration)
 
@@ -121,12 +130,37 @@ class CourseExpirationTestCase(ModuleStoreTestCase):
         start_date = now() + timedelta(weeks=10)
         future_course = CourseFactory(start=start_date)
         enrollment = CourseEnrollment.enroll(self.user, future_course.id, CourseMode.AUDIT)
-        result = get_user_course_expiration_date(self.user, future_course)
+        result = get_user_course_expiration_date(
+            self.user,
+            CourseOverview.get_from_id(future_course.id),
+        )
         self.assertEqual(result, None)
 
         add_course_mode(future_course, upgrade_deadline_expired=False)
-        result = get_user_course_expiration_date(self.user, future_course)
-        content_availability_date = start_date
+        result = get_user_course_expiration_date(
+            self.user,
+            CourseOverview.get_from_id(future_course.id),
+        )
+        content_availability_date = start_date.replace(microsecond=0)
+        self.assertEqual(result, content_availability_date + access_duration)
+
+    @mock.patch("openedx.features.course_duration_limits.access.get_course_run_details")
+    def test_expired_upgrade_deadline(self, mock_get_course_run_details):
+        """
+        The expiration date still exists if the upgrade deadline has passed
+        """
+        access_duration = timedelta(weeks=7)
+        mock_get_course_run_details.return_value = {'weeks_to_complete': 7}
+
+        start_date = now() - timedelta(weeks=10)
+        course = CourseFactory(start=start_date)
+        enrollment = CourseEnrollment.enroll(self.user, course.id, CourseMode.AUDIT)
+        add_course_mode(course, upgrade_deadline_expired=True)
+        result = get_user_course_expiration_date(
+            self.user,
+            CourseOverview.get_from_id(course.id),
+        )
+        content_availability_date = enrollment.created
         self.assertEqual(result, content_availability_date + access_duration)
 
     @mock.patch("openedx.features.course_duration_limits.access.get_course_run_details")
@@ -180,7 +214,7 @@ class CourseExpirationTestCase(ModuleStoreTestCase):
         response = self.client.get(course_home_url, follow=True)
         self.assertEqual(response.status_code, 200)
         self.assertItemsEqual(response.redirect_chain, [])
-        banner_text = 'Your access to this course expires on'
+        banner_text = 'You lose all access to this course, including your progress,'
         if show_expiration_banner:
             self.assertIn(banner_text, response.content)
         else:
@@ -221,7 +255,7 @@ class CourseExpirationTestCase(ModuleStoreTestCase):
         ExperimentData.objects.create(
             user=audit_student,
             experiment_id=EXPERIMENT_ID,
-            key=EXPERIMENT_DATA_HOLDBACK_KEY.format(audit_student),
+            key=EXPERIMENT_DATA_HOLDBACK_KEY,
             value='True'
         )
         CourseDurationLimitConfig.objects.create(
@@ -245,7 +279,7 @@ class CourseExpirationTestCase(ModuleStoreTestCase):
         response = self.client.get(course_home_url, follow=True)
         self.assertEqual(response.status_code, 200)
         self.assertItemsEqual(response.redirect_chain, [])
-        banner_text = 'Your access to this course expires on'
+        banner_text = 'You lose all access to this course, including your progress,'
         self.assertNotIn(banner_text, response.content)
 
     @mock.patch("openedx.features.course_duration_limits.access.get_course_run_details")

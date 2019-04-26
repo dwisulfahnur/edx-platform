@@ -38,7 +38,7 @@ from xmodule.modulestore.inheritance import InheritanceKeyValueStore, own_metada
 from xmodule.raw_module import EmptyDataRawDescriptor
 from xmodule.validation import StudioValidation, StudioValidationMessage
 from xmodule.video_module import manage_video_subtitles_save
-from xmodule.x_module import XModule, module_attr
+from xmodule.x_module import XModule, module_attr, PUBLIC_VIEW, STUDENT_VIEW
 from xmodule.xml_module import deserialize_field, is_pointer_tag, name_to_pathname
 
 from .bumper_utils import bumperize
@@ -54,6 +54,7 @@ from .transcripts_utils import (
 from .video_handlers import VideoStudentViewHandlers, VideoStudioViewHandlers
 from .video_utils import create_youtube_string, format_xml_exception_message, get_poster, rewrite_video_url
 from .video_xfields import VideoFields
+from web_fragments.fragment import Fragment
 
 # The following import/except block for edxval is temporary measure until
 # edxval is a proper XBlock Runtime Service.
@@ -208,7 +209,13 @@ class VideoModule(VideoFields, VideoTranscriptsMixin, VideoStudentViewHandlers, 
 
         return False
 
-    def get_html(self):
+    def public_view(self, context):
+        """
+        Returns a fragment that contains the html for the public view
+        """
+        return Fragment(self.get_html(view=PUBLIC_VIEW))
+
+    def get_html(self, view=STUDENT_VIEW):
 
         track_status = (self.download_track and self.track)
         transcript_download_format = self.transcript_download_format if not track_status else None
@@ -278,10 +285,11 @@ class VideoModule(VideoFields, VideoTranscriptsMixin, VideoStudentViewHandlers, 
         if getattr(self, 'video_speed_optimizations', True) and cdn_url:
             branding_info = BrandingInfoConfig.get_config().get(self.system.user_location)
 
-            for index, source_url in enumerate(sources):
-                new_url = rewrite_video_url(cdn_url, source_url)
-                if new_url:
-                    sources[index] = new_url
+            if self.edx_video_id and edxval_api:
+                for index, source_url in enumerate(sources):
+                    new_url = rewrite_video_url(cdn_url, source_url)
+                    if new_url:
+                        sources[index] = new_url
 
         # If there was no edx_video_id, or if there was no download specified
         # for it, we fall back on whatever we find in the VideoDescriptor
@@ -338,6 +346,7 @@ class VideoModule(VideoFields, VideoTranscriptsMixin, VideoStudentViewHandlers, 
         autoadvance_this_video = self.auto_advance and autoadvance_enabled
 
         metadata = {
+            'saveStateEnabled': view != PUBLIC_VIEW,
             'saveStateUrl': self.system.ajax_url + '/save_user_state',
             'autoplay': settings.FEATURES.get('AUTOPLAY_VIDEOS', False),
             'streams': self.youtube_streams,

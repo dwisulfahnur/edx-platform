@@ -1,14 +1,18 @@
 """
 Tests student admin.py
 """
+import datetime
 import ddt
 from django.contrib.admin.sites import AdminSite
 from django.contrib.auth.models import User
+from django.conf import settings
+from django.forms import ValidationError
 from django.urls import reverse
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from mock import Mock
 
 from student.admin import COURSE_ENROLLMENT_ADMIN_SWITCH, UserAdmin
+from student.models import LoginFailures
 from student.tests.factories import CourseEnrollmentFactory, UserFactory
 from xmodule.modulestore.tests.django_utils import SharedModuleStoreTestCase
 from xmodule.modulestore.tests.factories import CourseFactory
@@ -209,7 +213,7 @@ class CourseEnrollmentAdminTest(SharedModuleStoreTestCase):
         super(CourseEnrollmentAdminTest, self).setUp()
         self.user = UserFactory.create(is_staff=True, is_superuser=True)
         self.course = CourseFactory()
-        CourseEnrollmentFactory(
+        self.course_enrollment = CourseEnrollmentFactory(
             user=self.user,
             course_id=self.course.id,  # pylint: disable=no-member
         )
@@ -254,3 +258,111 @@ class CourseEnrollmentAdminTest(SharedModuleStoreTestCase):
             # Locate the <td> column containing the username
             user_field = next(col for col in response.context['results'][idx] if "field-user" in col)
             self.assertIn(username, user_field)
+
+    def test_save_toggle_active(self):
+        """
+        Edit a CourseEnrollment to toggle its is_active checkbox, save it and verify that it was toggled.
+        When the form is saved, Django uses a QueryDict object which is immutable and needs special treatment.
+        This test implicitly verifies that the POST parameters are handled correctly.
+        """
+        # is_active will change from True to False
+        self.assertTrue(self.course_enrollment.is_active)
+        data = {
+            'user': unicode(self.course_enrollment.user.id),
+            'course': unicode(self.course_enrollment.course.id),
+            'is_active': 'false',
+            'mode': self.course_enrollment.mode,
+        }
+
+        with COURSE_ENROLLMENT_ADMIN_SWITCH.override(active=True):
+            response = self.client.post(
+                reverse('admin:student_courseenrollment_change', args=(self.course_enrollment.id, )),
+                data=data,
+            )
+        self.assertEqual(response.status_code, 302)
+
+        self.course_enrollment.refresh_from_db()
+        self.assertFalse(self.course_enrollment.is_active)
+
+    def test_save_invalid_course_id(self):
+        """
+        Send an invalid course ID instead of "org.0/course_0/Run_0" when saving, and verify that it fails.
+        """
+        data = {
+            'user': unicode(self.course_enrollment.user.id),
+            'course': 'invalid-course-id',
+            'is_active': 'true',
+            'mode': self.course_enrollment.mode,
+        }
+
+        with COURSE_ENROLLMENT_ADMIN_SWITCH.override(active=True):
+            with self.assertRaises(ValidationError):
+                self.client.post(
+                    reverse('admin:student_courseenrollment_change', args=(self.course_enrollment.id, )),
+                    data=data,
+                )
+
+
+@ddt.ddt
+class LoginFailuresAdminTest(TestCase):
+    """Test Login Failures Admin."""
+
+    @classmethod
+    def setUpClass(cls):
+        """Setup class"""
+        super(LoginFailuresAdminTest, cls).setUpClass()
+        cls.user = UserFactory.create(is_staff=True, is_superuser=True)
+        cls.user.save()
+
+    def setUp(self):
+        """Setup."""
+        super(LoginFailuresAdminTest, self).setUp()
+        self.client.login(username=self.user.username, password='test')
+        user = UserFactory.create()
+        LoginFailures.objects.create(user=self.user, failure_count=10, lockout_until=datetime.datetime.now())
+        LoginFailures.objects.create(user=user, failure_count=2)
+
+    def tearDown(self):
+        """Tear Down."""
+        super(LoginFailuresAdminTest, self).tearDown()
+        LoginFailures.objects.all().delete()
+
+    @ddt.data(
+        reverse('admin:student_loginfailures_changelist'),
+        reverse('admin:student_loginfailures_add'),
+        reverse('admin:student_loginfailures_change', args=(1,)),
+        reverse('admin:student_loginfailures_delete', args=(1,)),
+    )
+    def test_feature_disabled(self, url):
+        """Test if feature is disabled there's no access to the admin module."""
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 403)
+        response = self.client.post(url)
+        self.assertEqual(response.status_code, 403)
+
+    @override_settings(FEATURES={'ENABLE_MAX_FAILED_LOGIN_ATTEMPTS': True})
+    def test_unlock_student_accounts(self):
+        """Test batch unlock student accounts."""
+        url = reverse('admin:student_loginfailures_changelist')
+        self.client.post(
+            url,
+            data={
+                'action': 'unlock_student_accounts',
+                '_selected_action': [unicode(o.pk) for o in LoginFailures.objects.all()]
+            },
+            follow=True
+        )
+        count = LoginFailures.objects.count()
+        self.assertEqual(count, 0)
+
+    @override_settings(FEATURES={'ENABLE_MAX_FAILED_LOGIN_ATTEMPTS': True})
+    def test_unlock_account(self):
+        """Test unlock single student account."""
+        url = reverse('admin:student_loginfailures_change', args=(1, ))
+        start_count = LoginFailures.objects.count()
+        self.client.post(
+            url,
+            data={'_unlock': 1}
+        )
+        count = LoginFailures.objects.count()
+        self.assertEqual(count, start_count - 1)

@@ -84,6 +84,20 @@ from student.models import CourseEnrollment
         banner.showMessage(${redirect_message | n, dump_js_escaped_json})
     </%static:require_module>
   % endif
+  % if recovery_email_message:
+      <%static:require_module module_name="js/views/message_banner" class_name="MessageBannerView">
+        var banner = new MessageBannerView({urgency: 'low', type: 'warning', hideCloseBtn: false, isRecoveryEmailMsg: true});
+        $('#content').prepend(banner.$el);
+        banner.showMessage(${recovery_email_message | n, dump_js_escaped_json})
+      </%static:require_module>
+  % endif
+  % if recovery_email_activation_message:
+      <%static:require_module module_name="js/views/message_banner" class_name="MessageBannerView">
+        var banner = new MessageBannerView({urgency: 'low', type: 'warning', isRecoveryEmailMsg: true});
+        $('#content').prepend(banner.$el);
+        banner.showMessage(${recovery_email_activation_message | n, dump_js_escaped_json})
+      </%static:require_module>
+  % endif
 </%block>
 
 <div class="dashboard-notifications" tabindex="-1">
@@ -231,7 +245,7 @@ from student.models import CourseEnrollment
           % endif
         </div>
       </div>
-      <div class="side-container">
+      <div class="side-container" role="complementary" aria-label="messages">
         %if display_sidebar_account_activation_message:
           <div class="sidebar-notification">
             <%include file="${static.get_template_path('registration/account_activation_sidebar_notice.html')}" />
@@ -254,6 +268,15 @@ from student.models import CourseEnrollment
             </form>
           </div>
           <div id="dashboard-search-results" class="search-results dashboard-search-results"></div>
+        % endif
+
+        <%block name="skip_links">
+          % if settings.FEATURES.get('ENABLE_ANNOUNCEMENTS'):
+            <a id="announcements-skip" class="nav-skip sr-only sr-only-focusable" href="#announcements">${_("Skip to list of announcements")}</a>
+          % endif
+        </%block>
+        % if settings.FEATURES.get('ENABLE_ANNOUNCEMENTS'):
+          <%include file='dashboard/_dashboard_announcements.html' />
         % endif
 
         % if display_sidebar_on_dashboard:

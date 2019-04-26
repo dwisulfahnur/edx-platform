@@ -51,6 +51,12 @@ DATABASES = {
     }
 }
 
+PROCTORING_BACKENDS = {
+    'DEFAULT': 'mock',
+    'mock': {},
+    'mock_proctoring_without_rules': {},
+}
+
 FEATURES = {}
 
 INSTALLED_APPS = (
@@ -82,12 +88,13 @@ INSTALLED_APPS = (
     'milestones',
     'celery_utils',
     'waffle',
+    'edx_when',
 
     # Django 1.11 demands to have imported models supported by installed apps.
     'completion',
 )
 
-LMS_ROOT_URL = 'http://localhost:8000'
+LMS_ROOT_URL = "http://localhost:8000"
 
 MEDIA_ROOT = tempfile.mkdtemp()
 

@@ -228,7 +228,6 @@ FEATURES['ENFORCE_PASSWORD_POLICY'] = False
 FEATURES['ENABLE_MAX_FAILED_LOGIN_ATTEMPTS'] = False
 FEATURES['SQUELCH_PII_IN_LOGS'] = False
 FEATURES['PREVENT_CONCURRENT_LOGINS'] = False
-FEATURES['ADVANCED_SECURITY'] = False
 
 ######### Third-party auth ##########
 FEATURES['ENABLE_THIRD_PARTY_AUTH'] = True
@@ -251,15 +250,6 @@ THIRD_PARTY_AUTH_CUSTOM_AUTH_FORMS = {
         'error_url': '/misc/my-custom-sso-error-page'
     },
 }
-
-################################## OPENID #####################################
-FEATURES['AUTH_USE_OPENID'] = True
-FEATURES['AUTH_USE_OPENID_PROVIDER'] = True
-
-################################## SHIB #######################################
-FEATURES['AUTH_USE_SHIB'] = True
-FEATURES['SHIB_DISABLE_TOS'] = True
-FEATURES['RESTRICT_ENROLL_BY_REG_METHOD'] = True
 
 OPENID_CREATE_USERS = False
 OPENID_UPDATE_DETAILS_FROM_SREG = True
@@ -367,7 +357,6 @@ BLOCK_STRUCTURES_SETTINGS['PRUNING_ACTIVE'] = True
 
 # These ports are carefully chosen so that if the browser needs to
 # access them, they will be available through the SauceLabs SSH tunnel
-LETTUCE_SERVER_PORT = 8003
 XQUEUE_PORT = 8040
 YOUTUBE_PORT = 8031
 LTI_PORT = 8765
@@ -561,6 +550,8 @@ COMPREHENSIVE_THEME_LOCALE_PATHS = [REPO_ROOT / "themes/conf/locale", ]
 
 LMS_ROOT_URL = "http://localhost:8000"
 
+FRONTEND_LOGOUT_URL = LMS_ROOT_URL + '/logout'
+
 ECOMMERCE_API_URL = 'https://ecommerce.example.com/api/v2/'
 ENTERPRISE_API_URL = 'http://enterprise.example.com/enterprise/api/v1/'
 ENTERPRISE_CONSENT_API_URL = 'http://enterprise.example.com/consent/api/v1/'
@@ -585,7 +576,7 @@ VIDEO_TRANSCRIPTS_SETTINGS = dict(
 )
 
 ####################### Authentication Settings ##########################
-
+# pylint: disable=unicode-format-string
 JWT_AUTH.update({
     'JWT_PUBLIC_SIGNING_JWK_SET': (
         '{"keys": [{"kid": "BTZ9HA6K", "e": "AQAB", "kty": "RSA", "n": "o5cn3ljSRi6FaDEKTn0PS-oL9EFyv1pI7dRgffQLD1qf5D6'
@@ -607,7 +598,7 @@ JWT_AUTH.update({
         ': "RSA"}'
     ),
 })
-
+# pylint: enable=unicode-format-string
 ####################### Plugin Settings ##########################
 
 from openedx.core.djangoapps.plugins import plugin_settings, constants as plugin_constants
@@ -616,3 +607,6 @@ plugin_settings.add_plugins(__name__, plugin_constants.ProjectType.LMS, plugin_c
 ########################## Derive Any Derived Settings  #######################
 
 derive_settings(__name__)
+
+############### Settings for edx-rbac  ###############
+SYSTEM_WIDE_ROLE_CLASSES = os.environ.get("SYSTEM_WIDE_ROLE_CLASSES", [])

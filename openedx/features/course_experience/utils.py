@@ -11,10 +11,12 @@ from xmodule.modulestore.django import modulestore
 
 
 @request_cached()
-def get_course_outline_block_tree(request, course_id):
+def get_course_outline_block_tree(request, course_id, user=None):
     """
     Returns the root block of the course outline, with children as blocks.
     """
+
+    assert user is None or user.is_authenticated
 
     def populate_children(block, all_blocks):
         """
@@ -88,13 +90,12 @@ def get_course_outline_block_tree(request, course_id):
                     latest_completion,
                     block=block['children'][idx]
                 )
-                if block['children'][idx]['resume_block'] is True:
+                if block['children'][idx].get('resume_block') is True:
                     block['resume_block'] = True
 
             completable_blocks = [child for child in block['children']
-                                  if child['type'] != 'discussion']
-            if len([child['complete'] for child in block['children']
-                    if child['complete']]) == len(completable_blocks):
+                                  if child.get('type') != 'discussion']
+            if all(child.get('complete') for child in completable_blocks):
                 block['complete'] = True
 
     def mark_last_accessed(user, course_key, block):
@@ -156,13 +157,13 @@ def get_course_outline_block_tree(request, course_id):
     course_outline_root_block = all_blocks['blocks'].get(all_blocks['root'], None)
     if course_outline_root_block:
         populate_children(course_outline_root_block, all_blocks['blocks'])
-        set_last_accessed_default(course_outline_root_block)
-
-        mark_blocks_completed(
-            block=course_outline_root_block,
-            user=request.user,
-            course_key=course_key
-        )
+        if user:
+            set_last_accessed_default(course_outline_root_block)
+            mark_blocks_completed(
+                block=course_outline_root_block,
+                user=request.user,
+                course_key=course_key
+            )
     return course_outline_root_block
 
 
@@ -171,7 +172,7 @@ def get_resume_block(block):
     Gets the deepest block marked as 'resume_block'.
 
     """
-    if not block['resume_block']:
+    if block.get('authorization_denial_reason') or not block['resume_block']:
         return None
     if not block.get('children'):
         return block

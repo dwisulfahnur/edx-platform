@@ -4,7 +4,11 @@ API function for retrieving course blocks data
 
 import lms.djangoapps.course_blocks.api as course_blocks_api
 from lms.djangoapps.course_blocks.transformers.hidden_content import HiddenContentTransformer
+from lms.djangoapps.course_blocks.transformers.hide_empty import HideEmptyTransformer
+from lms.djangoapps.course_blocks.transformers.access_denied_filter import AccessDeniedMessageFilterTransformer
 from openedx.core.djangoapps.content.block_structure.transformers import BlockStructureTransformers
+from openedx.core.djangoapps.waffle_utils import WaffleFlag, WaffleFlagNamespace
+from openedx.core.lib.mobile_utils import is_request_from_mobile_app
 
 from .serializers import BlockDictSerializer, BlockSerializer
 from .transformers.blocks_api import BlocksAPITransformer
@@ -23,6 +27,7 @@ def get_blocks(
         student_view_data=None,
         return_type='dict',
         block_types_filter=None,
+        hide_access_denials=False,
 ):
     """
     Return a serialized representation of the course blocks.
@@ -49,7 +54,20 @@ def get_blocks(
             the format for returning the blocks.
         block_types_filter (list): Optional list of block type names used to filter
             the final result of returned blocks.
+        hide_access_denials (bool): When True, filter out any blocks that were
+            denied access to the user, even if they have access denial messages
+            attached.
     """
+
+    course_blocks_namespace = WaffleFlagNamespace(name=u'course_blocks_api')
+    hide_access_denials_flag = WaffleFlag(
+        waffle_namespace=course_blocks_namespace,
+        flag_name=u'hide_access_denials',
+        flag_undefined_default=False
+    )
+    if hide_access_denials_flag.is_enabled():
+        hide_access_denials = True
+
     # create ordered list of transformers, adding BlocksAPITransformer at end.
     transformers = BlockStructureTransformers()
     if requested_fields is None:
@@ -60,10 +78,21 @@ def get_blocks(
 
     if user is not None:
         transformers += course_blocks_api.get_course_block_access_transformers(user)
-        transformers += [MilestonesAndSpecialExamsTransformer(
-            include_special_exams=include_special_exams,
-            include_gated_sections=include_gated_sections)]
-        transformers += [HiddenContentTransformer()]
+        transformers += [
+            MilestonesAndSpecialExamsTransformer(
+                include_special_exams=include_special_exams,
+                include_gated_sections=include_gated_sections
+            ),
+            HiddenContentTransformer()
+        ]
+
+    if hide_access_denials:
+        transformers += [AccessDeniedMessageFilterTransformer()]
+
+    # TODO: Remove this after REVE-52 lands and old-mobile-app traffic falls to < 5% of mobile traffic
+    if is_request_from_mobile_app(request):
+        transformers += [HideEmptyTransformer()]
+
     transformers += [
         BlocksAPITransformer(
             block_counts,
